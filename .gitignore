@@ -1,0 +1,7 @@
+
+# Private stuff
+private
+
+# Platform IO build and dependencies
+.pio
+.vscode/c_cpp_properties.json

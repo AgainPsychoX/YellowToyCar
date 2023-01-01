@@ -1,0 +1,15 @@
+{
+	"editor.indentSize": "tabSize",
+	"editor.tabSize": 4,
+	"files.associations": {
+		"Kconfig": "shellscript",
+		"Kconfig.projbuild": "shellscript"
+	},
+	"cSpell.words": [
+		"PCLK",
+		"PWDN",
+		"SIOD",
+		"WROVER",
+		"XCLK"
+	]
+}
