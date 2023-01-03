@@ -3,13 +3,28 @@
 	"editor.tabSize": 4,
 	"files.associations": {
 		"Kconfig": "shellscript",
-		"Kconfig.projbuild": "shellscript"
+		"Kconfig.projbuild": "shellscript",
+		"typeinfo": "cpp"
 	},
 	"cSpell.words": [
+		"authmode",
+		"ledc",
+		"netif",
 		"PCLK",
+		"PIXFORMAT",
+		"platformio",
+		"PSRAM",
 		"PWDN",
+		"sccb",
 		"SIOD",
+		"SOFTAP",
+		"SSID",
+		"strncpy",
+		"UXGA",
 		"WROVER",
 		"XCLK"
-	]
+	],
+	"files.exclude": {
+		"**/.pio": true
+	}
 }

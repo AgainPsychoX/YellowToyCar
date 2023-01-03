@@ -168,11 +168,49 @@ Software consist of:
 
 
 
+### Tasks
+
+| Friendly name | Name     | Affinity | Priority | Source file | Description   |
+|:--------------|:---------|:--------:|:--------:|:------------|:--------------|
+| IPC tasks     | `ipcx`\* | All\*    | 0        | (internal)  | IPC tasks are used to implement the Inter-Processor Call feature.          |
+| Main          | `main`   | CPU0     | 1        | `main.cpp`  | Initializes everything, starts other tasks, then carries background logic. |
+| Camera stream | `httpd`  | CPU0     | 5        | `camera.cpp`
+| LwIP          |          | ?
+| WiFi          |          | CPU0
+| Events        |          | ?
+| Idle tasks    | `ipcx`\* | All\*    | 24       | (internal)  | Idle tasks created for (and pinned to) each CPU.
+
+<small>\* - Some tasks work on multiple CPUs, as separate tasks.</small>
+
+
+
+
 
 ## To-do
 
-+ ...
-
++ Files:
+	+ `main.cpp` externs everything, initializes everything, starts everything...
+	+ `http.cpp` servers handlers (both main & streaming)
+	+ `udp.cpp` whole UDP fast control server, externs state.
+	+ `hal.cpp` abstraction over motors and lights.
++ Min-max tasks:
+	+ CPU pins:
+		+ One core for HTTP and trash tasks
+		+ Other core for networking & fast control (UDP)
+	+ Use mutex to lock frame buffer between capture and streaming.
+	+ Trace tasks? `vTaskList`/`uxTaskGetSystemState`
++ Networking
+	+ Configuration API
+	+ Allow set static IP for station mode.
+	+ Configuration UI
+	+ Enter soft AP if couldn't connect to configured network.
+	+ Allow set IP and DHCP settings for AP mode.
+	+ Check periodicity for configured network while in soft AP (unless someone connected to soft AP).
+	+ Detect connection dropped https://github.com/espressif/esp-idf/blob/master/examples/wifi/getting_started/softAP/main/softap_example_main.c#L33
+	+ Optionally allow entering soft AP if lost and cannot find configured network, by duration setting.
+	+ Captive portal when in AP mode.
+	+ Password protection (especially useful when connecting to open networks).
++ Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
 
 
 
