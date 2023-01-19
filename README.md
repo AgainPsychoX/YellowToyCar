@@ -244,8 +244,6 @@ Software consist of:
 + Create our own `Kconfig` file to keep optional features there, including some debugging.
 + You can use NAT?! https://github.com/jonask1337/esp-idf-nat-example/blob/master/main/main.c
 + Use default C++ [`std::hash`](https://en.cppreference.com/w/cpp/utility/hash) (murmur most-likely, but might be more optimized than our `fnv1a32`)
-+ There are like exact same 20 lines for loading current network settings in `http.cpp config_handler` and `network.cpp config_network`, but how do refactor it?
-	- Additional output buffer for config handling process would be nice, but we have limited memory.
-	- Moving it to some function/macro looks ugly.
++ Use `std::` over C stuff where possible, please?
 
 

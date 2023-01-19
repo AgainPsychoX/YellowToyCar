@@ -145,12 +145,24 @@ void init_network()
 
 static const char* TAG_CONFIG_NETWORK = "config-network";
 
-struct wifi_common_config_t {
+const char* wifi_mode_to_cstr(wifi_mode_t mode)
+{
+	switch (mode) {
+		case WIFI_MODE_STA:     return "sta";
+		case WIFI_MODE_AP:      return "ap";
+		case WIFI_MODE_APSTA:   return "apsta";
+		default:                return NULL;
+	}
+}
+
+struct wifi_common_config_t
+{
 	char ssid[32];
 	char password[64];
 };
 
-inline bool has_simple_value(const jsmntok_t* token) {
+inline bool has_simple_value(const jsmntok_t* token)
+{
 	if (token->type == JSMN_UNDEFINED) return false;
 	if (token->type == JSMN_OBJECT) return false;
 	if (token->type == JSMN_ARRAY) return false;
@@ -297,12 +309,19 @@ inline esp_err_t config_network_sta(
 	return ESP_OK;
 }
 
-/// @brief Configures networking related stuff.
-/// @param buffer Buffer with JSON data that was parsed into JSON into tokens.
-///               Note: Passed non-const to allow in-place strings manipulation.
-/// @param first_token First JSMN JSON token related to the config to be parsed.
+/// @brief Applies (and/or reads current) JSON configuration for networking.
+/// @param[in] input Buffer with JSON data that was parsed into JSON into tokens.
+///		Note: Passed non-const to allow in-place strings manipulation.
+/// @param[in] first_token First JSMN JSON token related to the config to be parsed.
+/// @param[out] output Optional buffer for writing JSON with current configuration.
+/// @param[in] output_length Length of output buffer.
+/// @param[out] output_return Used to return number of bytes that would be written 
+/// 	to the output, or negative for error. Basically `printf`-like return.
 /// @return 
-esp_err_t config_network(char* buffer, jsmntok_t* first_token) {
+esp_err_t config_network(
+	char* input, jsmntok_t* first_token,
+	char* output, size_t output_length, int* output_return
+) {
 	if (unlikely(first_token->type != JSMN_OBJECT))
 		return ESP_FAIL;
 
@@ -327,111 +346,161 @@ esp_err_t config_network(char* buffer, jsmntok_t* first_token) {
 	ESP_IGNORE_ERROR(nvs_handle->get_item("wifi_mode",  reinterpret_cast<uint32_t&>(mode)));
 	ESP_IGNORE_ERROR(nvs_handle->get_item("fallback",   reinterpret_cast<uint8_t&>(fallback)));
 
-	for (size_t i = 0; i < first_token->size; i += 2) {
-		auto* key_token   = first_token + i + 1;
-		auto* value_token = first_token + i + 2;
-		printf("JSON parsing in config_network: key='%*s'\n", key_token->end - key_token->start, buffer + key_token->start);
+	if (input) {
+		for (size_t i = 0; i < first_token->size; i += 2) {
+			auto* key_token   = first_token + i + 1;
+			auto* value_token = first_token + i + 2;
+			printf("JSON parsing in config_network: key='%*s'\n", key_token->end - key_token->start, input + key_token->start);
 
-		const auto key_hash = fnv1a32(buffer + key_token->start, buffer + key_token->end);
-		if (value_token->type == JSMN_OBJECT) {
-			switch (key_hash) {
-				case fnv1a32("ap"): {
-					if (config_network_ap(buffer, value_token, ap_config, ap_ip_info) != ESP_OK)
-						return ESP_FAIL;
-					break;
-				}
-				case fnv1a32("sta"): {
-					if (config_network_sta(buffer, value_token, sta_config, sta_ip_info, sta_static) != ESP_OK)
-						return ESP_FAIL;
-					break;
-				}
-				default:
-					ESP_LOGV(TAG_CONFIG_NETWORK, "Unknown field '%.*s' for network config JSON object, ignoring.", 
-						key_token->end - key_token->start, buffer + key_token->start);
-					break;
-			}
-			i += value_token->size;
-		}
-		else {
-			if (unlikely(!has_simple_value(value_token)))
-				return ESP_FAIL;
-
-			switch (key_hash) {
-				case fnv1a32("mode"): {
-					const uint32_t value_hash = fnv1a32(buffer + value_token->start, buffer + value_token->end);
-					switch (value_hash) {
-						case fnv1a32("sta"):   mode = WIFI_MODE_STA; break;
-						case fnv1a32("ap"):    mode = WIFI_MODE_AP; break;
-						case fnv1a32("nat"):
-						case fnv1a32("apsta"): mode = WIFI_MODE_APSTA; break;
-						default:
+			const auto key_hash = fnv1a32(input + key_token->start, input + key_token->end);
+			if (value_token->type == JSMN_OBJECT) {
+				switch (key_hash) {
+					case fnv1a32("ap"): {
+						if (config_network_ap(input, value_token, ap_config, ap_ip_info) != ESP_OK)
 							return ESP_FAIL;
+						break;
 					}
-					break;
-				}
-				case fnv1a32("fallback"): {
-					fallback = atoi(buffer + value_token->start);
-					if (fallback != 0 && fallback < 1000) {
-						ESP_LOGV(TAG_CONFIG_NETWORK, "Fallback timeout clamped to minimal value of 1 second.");
-						fallback = 1000;
+					case fnv1a32("sta"): {
+						if (config_network_sta(input, value_token, sta_config, sta_ip_info, sta_static) != ESP_OK)
+							return ESP_FAIL;
+						break;
 					}
-					break;
+					default:
+						ESP_LOGV(TAG_CONFIG_NETWORK, "Unknown field '%.*s' for network config JSON object, ignoring.", 
+							key_token->end - key_token->start, input + key_token->start);
+						break;
 				}
-				case fnv1a32("gateway"): {
-					buffer[value_token->end] = 0;
-					if (esp_netif_str_to_ip4(buffer + value_token->start, &ap_ip_info.gw) != ESP_OK)
-						return ESP_FAIL;
-					sta_ip_info.gw = ap_ip_info.gw;
-					break;
+				i += value_token->size;
+			}
+			else {
+				if (unlikely(!has_simple_value(value_token)))
+					return ESP_FAIL;
+
+				switch (key_hash) {
+					case fnv1a32("mode"): {
+						const uint32_t value_hash = fnv1a32(input + value_token->start, input + value_token->end);
+						switch (value_hash) {
+							case fnv1a32("sta"):   mode = WIFI_MODE_STA; break;
+							case fnv1a32("ap"):    mode = WIFI_MODE_AP; break;
+							case fnv1a32("nat"):
+							case fnv1a32("apsta"): mode = WIFI_MODE_APSTA; break;
+							default:
+								return ESP_FAIL;
+						}
+						break;
+					}
+					case fnv1a32("fallback"): {
+						fallback = atoi(input + value_token->start);
+						if (fallback != 0 && fallback < 1000) {
+							ESP_LOGV(TAG_CONFIG_NETWORK, "Fallback timeout clamped to minimal value of 1 second.");
+							fallback = 1000;
+						}
+						break;
+					}
+					case fnv1a32("gateway"): {
+						input[value_token->end] = 0;
+						if (esp_netif_str_to_ip4(input + value_token->start, &ap_ip_info.gw) != ESP_OK)
+							return ESP_FAIL;
+						sta_ip_info.gw = ap_ip_info.gw;
+						break;
+					}
+					default:
+						ESP_LOGV(TAG_CONFIG_NETWORK, "Unknown field '%.*s' for network config JSON object, ignoring.", 
+							key_token->end - key_token->start, input + key_token->start);
+						break;
 				}
-				default:
-					ESP_LOGV(TAG_CONFIG_NETWORK, "Unknown field '%.*s' for network config JSON object, ignoring.", 
-						key_token->end - key_token->start, buffer + key_token->start);
-					break;
 			}
 		}
+
+		if (unlikely(nvs_handle->set_item("ap.ip",    reinterpret_cast<uint32_t&>(ap_ip_info.ip))      != ESP_OK)) return ESP_FAIL;
+		if (unlikely(nvs_handle->set_item("ap.gw",    reinterpret_cast<uint32_t&>(ap_ip_info.gw))      != ESP_OK)) return ESP_FAIL;
+		if (unlikely(nvs_handle->set_item("ap.mask",  reinterpret_cast<uint32_t&>(ap_ip_info.netmask)) != ESP_OK)) return ESP_FAIL;
+		if (unlikely(nvs_handle->set_item("sta.ip",   reinterpret_cast<uint32_t&>(ap_ip_info.ip))      != ESP_OK)) return ESP_FAIL;
+		if (unlikely(nvs_handle->set_item("sta.gw",   reinterpret_cast<uint32_t&>(ap_ip_info.gw))      != ESP_OK)) return ESP_FAIL;
+		if (unlikely(nvs_handle->set_item("sta.mask", reinterpret_cast<uint32_t&>(ap_ip_info.netmask)) != ESP_OK)) return ESP_FAIL;
+
+		if (unlikely(nvs_handle->set_item("sta.static", reinterpret_cast<uint8_t&>(sta_static)) != ESP_OK)) return ESP_FAIL;
+		if (unlikely(nvs_handle->set_item("wifi_mode", reinterpret_cast<uint32_t&>(mode)) != ESP_OK)) return ESP_FAIL;
+		if (unlikely(nvs_handle->set_item("fallback", reinterpret_cast<uint8_t&>(sta_static)) != ESP_OK)) return ESP_FAIL;
+
+		if (unlikely(nvs_handle->commit() != ESP_OK)) return ESP_FAIL;
+
+		const bool is_ap  = mode == WIFI_MODE_AP  || mode == WIFI_MODE_APSTA;
+		const bool is_sta = mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA;
+
+		// WiFi AP/STA specific config are persisted by WiFi component.
+
+		esp_netif_dhcps_stop(ap_netif);
+		esp_netif_dhcpc_stop(sta_netif);
+
+		if (is_sta) esp_wifi_disconnect();
+
+		// FIXME: need to update DHCP server addresses (incl. leases) if AP address was changed
+
+		esp_wifi_set_mode(mode);
+
+		esp_wifi_set_config(WIFI_IF_AP,  reinterpret_cast<wifi_config_t*>(&ap_config));
+		esp_wifi_set_config(WIFI_IF_STA, reinterpret_cast<wifi_config_t*>(&sta_config));
+
+		if (is_ap)  esp_netif_dhcps_start(ap_netif);
+		if (is_sta) esp_netif_dhcpc_start(sta_netif);
+
+		if (is_sta) esp_wifi_connect();
+
+		if (mode == WIFI_MODE_APSTA) {
+			// TODO: NAT
+		}
+
+		// TODO: is restart necessary to apply the changes?
 	}
 
-	if (unlikely(nvs_handle->set_item("ap.ip",    reinterpret_cast<uint32_t&>(ap_ip_info.ip))      != ESP_OK)) return ESP_FAIL;
-	if (unlikely(nvs_handle->set_item("ap.gw",    reinterpret_cast<uint32_t&>(ap_ip_info.gw))      != ESP_OK)) return ESP_FAIL;
-	if (unlikely(nvs_handle->set_item("ap.mask",  reinterpret_cast<uint32_t&>(ap_ip_info.netmask)) != ESP_OK)) return ESP_FAIL;
-	if (unlikely(nvs_handle->set_item("sta.ip",   reinterpret_cast<uint32_t&>(ap_ip_info.ip))      != ESP_OK)) return ESP_FAIL;
-	if (unlikely(nvs_handle->set_item("sta.gw",   reinterpret_cast<uint32_t&>(ap_ip_info.gw))      != ESP_OK)) return ESP_FAIL;
-	if (unlikely(nvs_handle->set_item("sta.mask", reinterpret_cast<uint32_t&>(ap_ip_info.netmask)) != ESP_OK)) return ESP_FAIL;
-
-	if (unlikely(nvs_handle->set_item("sta.static", reinterpret_cast<uint8_t&>(sta_static)) != ESP_OK)) return ESP_FAIL;
-	if (unlikely(nvs_handle->set_item("wifi_mode", reinterpret_cast<uint32_t&>(mode)) != ESP_OK)) return ESP_FAIL;
-	if (unlikely(nvs_handle->set_item("fallback", reinterpret_cast<uint8_t&>(sta_static)) != ESP_OK)) return ESP_FAIL;
-
-	if (unlikely(nvs_handle->commit() != ESP_OK)) return ESP_FAIL;
-
-	const bool is_ap  = mode == WIFI_MODE_AP  || mode == WIFI_MODE_APSTA;
-	const bool is_sta = mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA;
-
-	// WiFi AP/STA specific config are persisted by WiFi component.
-
-	esp_netif_dhcps_stop(ap_netif);
-	esp_netif_dhcpc_stop(sta_netif);
-
-	if (is_sta) esp_wifi_disconnect();
-
-	// FIXME: need to update DHCP server addresses (incl. leases) if AP address was changed
-
-	esp_wifi_set_mode(mode);
-
-	esp_wifi_set_config(WIFI_IF_AP,  reinterpret_cast<wifi_config_t*>(&ap_config));
-	esp_wifi_set_config(WIFI_IF_STA, reinterpret_cast<wifi_config_t*>(&sta_config));
-
-	if (is_ap)  esp_netif_dhcps_start(ap_netif);
-	if (is_sta) esp_netif_dhcpc_start(sta_netif);
-
-	if (is_sta) esp_wifi_connect();
-
-	if (mode == WIFI_MODE_APSTA) {
-		// TODO: NAT
+	if (output) {
+		*output_return = snprintf(
+			output, output_length,
+			"{"
+				"\"mode\":\"%s\","
+				"\"fallback\":%u,"
+				"\"gateway\":\"%u.%u.%u.%u\","
+				// "\"dns1\":\"%u.%u.%u.%u\","
+				// "\"dns2\":\"%u.%u.%u.%u\""
+				"\"sta\":{"
+					"\"ssid\":\"%.32s\","
+					"\"psk\":\"%.64s\","
+					"\"ip\":\"%u.%u.%u.%u\","
+					"\"mask\":%u,"
+					"\"gateway\":\"%u.%u.%u.%u\","
+					"\"static\":%c"
+				"},"
+				"\"ap\":{"
+					"\"ssid\":\"%.32s\","
+					"\"psk\":\"%.64s\","
+					"\"ip\":\"%u.%u.%u.%u\","
+					"\"mask\":%u,"
+					"\"gateway\":\"%u.%u.%u.%u\","
+					"\"channel\":%u,"
+					"\"hidden\":%c"
+				"}"
+			"}",
+			wifi_mode_to_cstr(mode),
+			fallback,
+			ip4_addr_printf_unpack(&sta_ip_info.gw),
+			/* network.sta */
+			sta_config.ssid,
+			sta_config.password,
+			ip4_addr_printf_unpack(&sta_ip_info.ip),
+			numberOfSetBits(sta_ip_info.netmask.addr),
+			ip4_addr_printf_unpack(&sta_ip_info.gw),
+			'0' + sta_static,
+			/* network.ap */
+			ap_config.ssid,
+			ap_config.password,
+			ip4_addr_printf_unpack(&ap_ip_info.ip),
+			numberOfSetBits(ap_ip_info.netmask.addr),
+			ip4_addr_printf_unpack(&ap_ip_info.gw),
+			ap_config.channel,
+			'0' + ap_config.ssid_hidden
+		);
 	}
-
-	// TODO: is restart necessary to apply the changes?
 
 	return ESP_OK;
 }

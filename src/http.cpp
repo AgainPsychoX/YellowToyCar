@@ -237,21 +237,8 @@ esp_err_t status_handler(httpd_req_t* req)
 	return ESP_FAIL;
 }
 
-esp_err_t config_network(char* buffer, jsmntok_t* first_token); // from network.cpp
-esp_err_t config_camera(char* buffer, jsmntok_t* first_token); // from camera.cpp
-
-const char* wifi_mode_to_cstr(wifi_mode_t mode)
-{
-	switch (mode) {
-		case WIFI_MODE_STA:     return "sta";
-		case WIFI_MODE_AP:      return "ap";
-		case WIFI_MODE_APSTA:   return "apsta";
-		default:                return NULL;
-	}
-}
-
-/// Get IP info for given interface (if initialized), optionally falling back to reading from NVS.
-esp_err_t get_ip_info(wifi_interface_t interface, esp_netif_ip_info_t& ip_info, nvs::NVSHandle* nvs_handle); // from network.cpp
+esp_err_t config_network(char* input, jsmntok_t* first_token, char* output, size_t output_length, int* bytes_written); // from network.cpp
+esp_err_t config_camera(char* input, jsmntok_t* first_token, char* output, size_t output_length, int* bytes_written); // from camera.cpp
 
 esp_err_t config_handler(httpd_req_t* req)
 {
@@ -294,7 +281,7 @@ esp_err_t config_handler(httpd_req_t* req)
 			printf("JSON parsing in config_handler: key='%*s'\n", key_token->end - key_token->start, buffer + key_token->start);
 			switch (fnv1a32(buffer + key_token->start, buffer + key_token->end)) {
 				case fnv1a32("network"): {
-					if (config_network(buffer, tokens) != ESP_OK) {
+					if (config_network(buffer, tokens, nullptr, 0, nullptr) != ESP_OK) {
 						// TODO: how do we nicely pass understandable error? https://github.com/TartanLlama/expected 👀
 						httpd_resp_send_500(req);
 						return ESP_FAIL;
@@ -302,7 +289,7 @@ esp_err_t config_handler(httpd_req_t* req)
 					break;
 				}
 				case fnv1a32("camera"): {
-					if (config_camera(buffer, tokens) != ESP_OK) {
+					if (config_camera(buffer, tokens, nullptr, 0, nullptr) != ESP_OK) {
 						httpd_resp_send_500(req);
 						return ESP_FAIL;
 					}
@@ -329,135 +316,29 @@ esp_err_t config_handler(httpd_req_t* req)
 	////////////////////////////////////////////////////////////////////////////////
 	// Response with current configuration as JSON
 
-	esp_err_t nvs_result;
-	std::shared_ptr<nvs::NVSHandle> nvs_handle = nvs::open_nvs_handle("network", NVS_READWRITE, &nvs_result);
-	if (unlikely(nvs_result != ESP_OK)) return nvs_result;
-
-	wifi_ap_config_t ap_config;
-	wifi_sta_config_t sta_config;
-	esp_wifi_get_config(WIFI_IF_AP,  reinterpret_cast<wifi_config_t*>(&ap_config));
-	esp_wifi_get_config(WIFI_IF_STA, reinterpret_cast<wifi_config_t*>(&sta_config));
-
-	esp_netif_ip_info_t ap_ip_info;
-	esp_netif_ip_info_t sta_ip_info;
-	get_ip_info(WIFI_IF_AP,  ap_ip_info,  nvs_handle.get());
-	get_ip_info(WIFI_IF_STA, sta_ip_info, nvs_handle.get());
-
-	bool sta_static = false;
-	wifi_mode_t mode = WIFI_MODE_AP;
-	uint32_t fallback = 10000; // in milliseconds
-	ESP_IGNORE_ERROR(nvs_handle->get_item("sta.static", reinterpret_cast<uint8_t&>(sta_static)));
-	ESP_IGNORE_ERROR(nvs_handle->get_item("wifi_mode",  reinterpret_cast<uint32_t&>(mode)));
-	ESP_IGNORE_ERROR(nvs_handle->get_item("fallback",   reinterpret_cast<uint8_t&>(fallback)));
-
-	sensor_t* sensor = esp_camera_sensor_get();
-	if (unlikely(!sensor)) goto other_fail;
-
+	size_t bytes_written = 0;
 	ret = snprintf(
 		buffer, bufferLength,
 		"{"
-			"\"network\":{"
-				"\"mode\":\"%s\","
-				"\"fallback\":%u,"
-				"\"gateway\":\"%u.%u.%u.%u\","
-				// "\"dns1\":\"%u.%u.%u.%u\","
-				// "\"dns2\":\"%u.%u.%u.%u\""
-				"\"sta\":{"
-					"\"ssid\":\"%.32s\","
-					"\"psk\":\"%.64s\","
-					"\"ip\":\"%u.%u.%u.%u\","
-					"\"mask\":%u,"
-					"\"gateway\":\"%u.%u.%u.%u\","
-					"\"static\":%c"
-				"},"
-				"\"ap\":{"
-					"\"ssid\":\"%.32s\","
-					"\"psk\":\"%.64s\","
-					"\"ip\":\"%u.%u.%u.%u\","
-					"\"mask\":%u,"
-					"\"gateway\":\"%u.%u.%u.%u\","
-					"\"channel\":%u,"
-					"\"hidden\":%c"
-				"}"
-			"},"
-			"\"camera\":{"
-				"\"framesize\":%d,"
-				"\"pixformat\":%d,"
-				"\"quality\":%d,"
-				"\"bpc\":%d,"
-				"\"wpc\":%d,"
-				"\"hmirror\":%d,"
-				"\"vflip\":%d,"
-				"\"contrast\":%d,"
-				"\"brightness\":%d,"
-				"\"sharpness\":%d,"
-				"\"denoise\":%d,"
-				"\"gain_ceiling\":%d,"
-				"\"agc\":%d,"
-				"\"agc_gain\":%d,"
-				"\"aec\":%d,"
-				"\"aec2\":%d,"
-				"\"ae_level\":%d,"
-				"\"aec_value\":%d,"
-				"\"awb\":%d,"
-				"\"awb_gain\":%d,"
-				"\"wb_mode\":%d,"
-				"\"dcw\":%d,"
-				"\"raw_gma\":%d,"
-				"\"lenc\":%d,"
-				"\"special\":%d"
-			"},"
 			"\"uptime\":%llu"
-		"}",
-		/* network */
-		wifi_mode_to_cstr(mode),
-		fallback,
-		ip4_addr_printf_unpack(&sta_ip_info.gw),
-		/* network.sta */
-		sta_config.ssid,
-		sta_config.password,
-		ip4_addr_printf_unpack(&sta_ip_info.ip),
-		numberOfSetBits(sta_ip_info.netmask.addr),
-		ip4_addr_printf_unpack(&sta_ip_info.gw),
-		'0' + sta_static,
-		/* network.ap */
-		ap_config.ssid,
-		ap_config.password,
-		ip4_addr_printf_unpack(&ap_ip_info.ip),
-		numberOfSetBits(ap_ip_info.netmask.addr),
-		ip4_addr_printf_unpack(&ap_ip_info.gw),
-		ap_config.channel,
-		'0' + ap_config.ssid_hidden,
-		/* camera */
-		static_cast<uint8_t>(sensor->status.framesize),
-		static_cast<uint8_t>(sensor->pixformat),
-		sensor->status.quality,
-		sensor->status.bpc,
-		sensor->status.wpc,
-		sensor->status.hmirror,
-		sensor->status.vflip,
-		sensor->status.contrast,
-		sensor->status.brightness,
-		sensor->status.sharpness,
-		sensor->status.denoise,
-		sensor->status.gainceiling,
-		sensor->status.agc,
-		sensor->status.agc_gain,
-		sensor->status.aec,
-		sensor->status.aec2,
-		sensor->status.ae_level,
-		sensor->status.aec_value,
-		sensor->status.awb,
-		sensor->status.awb_gain,
-		sensor->status.wb_mode,
-		sensor->status.dcw,
-		sensor->status.raw_gma,
-		sensor->status.lenc,
-		sensor->status.special_effect,
-		/* ... */
+			"\"network\":",
 		esp_timer_get_time()
 	);
 	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto other_fail;
+	bytes_written += ret;
+
+	config_network(nullptr, nullptr, buffer + bytes_written, bufferLength - bytes_written, &ret);
+	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto other_fail;
+	bytes_written += ret;
+
+	bytes_written += sprintf(buffer + bytes_written, ",\"camera\":");
+
+	config_camera(nullptr, nullptr, buffer + bytes_written, bufferLength - bytes_written, &ret);
+	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto other_fail;
+	bytes_written += ret;
+
+	buffer[bytes_written++] = '}';
+
 	httpd_resp_set_type(req, "application/json");
 	httpd_resp_send(req, buffer, ret);
 	printf("uxTaskGetStackHighWaterMark(NULL) for config_handler: %u\n", uxTaskGetStackHighWaterMark(NULL));

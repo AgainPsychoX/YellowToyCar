@@ -113,8 +113,19 @@ framesize_t parse_framesize(const char* str)
 	}
 }
 
-esp_err_t config_camera(char* buffer, jsmntok_t* first_token)
-{
+/// @brief Applies (and/or reads current) JSON configuration for camera.
+/// @param[in] input Buffer with JSON data that was parsed into JSON into tokens.
+///		Note: Passed non-const to allow in-place strings manipulation.
+/// @param[in] first_token First JSMN JSON token related to the config to be parsed.
+/// @param[out] output Optional buffer for writing JSON with current configuration.
+/// @param[in] output_length Length of output buffer.
+/// @param[out] output_return Used to return number of bytes that would be written 
+/// 	to the output, or negative for error. Basically `printf`-like return.
+/// @return 
+esp_err_t config_camera(
+	char* input, jsmntok_t* first_token,
+	char* output, size_t output_length, int* output_return
+) {
 	if (unlikely(first_token->type != JSMN_OBJECT))
 		return ESP_FAIL;
 
@@ -124,131 +135,191 @@ esp_err_t config_camera(char* buffer, jsmntok_t* first_token)
 		return ESP_FAIL;
 	}
 
-	for (size_t i = 0; i < first_token->size; i += 2) {
-		auto* key_token   = first_token + i + 1;
-		auto* value_token = first_token + i + 2;
-		printf("JSON parsing in config_network: key='%*s'\n", key_token->end - key_token->start, buffer + key_token->start);
-		if (unlikely(!has_simple_value(value_token)))
-			return ESP_FAIL;
-		switch (fnv1a32(buffer + key_token->start, buffer + key_token->end)) {
-			case fnv1a32("framesize"):
-				buffer[value_token->end] = 0;
-				sensor->set_framesize(sensor, parse_framesize(buffer + value_token->start));
-				break;
-			case fnv1a32("pixformat"):
-				buffer[value_token->end] = 0;
-				sensor->set_pixformat(sensor, parse_pixformat(buffer + value_token->start));
-				break;
-			case fnv1a32("quality"): /* for JPEG compression */
-				sensor->set_quality(sensor, atoi(buffer + value_token->start));
-				break;
+	if (input) {
+		for (size_t i = 0; i < first_token->size; i += 2) {
+			auto* key_token   = first_token + i + 1;
+			auto* value_token = first_token + i + 2;
+			printf("JSON parsing in config_network: key='%*s'\n", key_token->end - key_token->start, input + key_token->start);
+			if (unlikely(!has_simple_value(value_token)))
+				return ESP_FAIL;
+			switch (fnv1a32(input + key_token->start, input + key_token->end)) {
+				case fnv1a32("framesize"):
+					input[value_token->end] = 0;
+					sensor->set_framesize(sensor, parse_framesize(input + value_token->start));
+					break;
+				case fnv1a32("pixformat"):
+					input[value_token->end] = 0;
+					sensor->set_pixformat(sensor, parse_pixformat(input + value_token->start));
+					break;
+				case fnv1a32("quality"): /* for JPEG compression */
+					sensor->set_quality(sensor, atoi(input + value_token->start));
+					break;
 
-			case fnv1a32("bpc"):
-				sensor->set_bpc(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
-			case fnv1a32("wpc"):
-				sensor->set_wpc(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
+				case fnv1a32("bpc"):
+					sensor->set_bpc(sensor, parseBooleanFast(input + value_token->start));
+					break;
+				case fnv1a32("wpc"):
+					sensor->set_wpc(sensor, parseBooleanFast(input + value_token->start));
+					break;
 
-			case fnv1a32("hmirror"):
-				sensor->set_hmirror(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
-			case fnv1a32("vflip"):
-				sensor->set_vflip(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
+				case fnv1a32("hmirror"):
+					sensor->set_hmirror(sensor, parseBooleanFast(input + value_token->start));
+					break;
+				case fnv1a32("vflip"):
+					sensor->set_vflip(sensor, parseBooleanFast(input + value_token->start));
+					break;
 
-			case fnv1a32("contrast"):
-				sensor->set_contrast(sensor, atoi(buffer + value_token->start));
-				break;
-			case fnv1a32("brightness"):
-				sensor->set_brightness(sensor, atoi(buffer + value_token->start));
-				break;
+				case fnv1a32("contrast"):
+					sensor->set_contrast(sensor, atoi(input + value_token->start));
+					break;
+				case fnv1a32("brightness"):
+					sensor->set_brightness(sensor, atoi(input + value_token->start));
+					break;
 
-			case fnv1a32("sharpness"): 
-				// TODO: not supported by original library
-				sensor->set_sharpness(sensor, atoi(buffer + value_token->start));
-				break;
-			case fnv1a32("denoise"):
-				// TODO: not supported by original library
-				sensor->set_denoise(sensor, atoi(buffer + value_token->start));
-				break;
+				case fnv1a32("sharpness"): 
+					// TODO: not supported by original library
+					sensor->set_sharpness(sensor, atoi(input + value_token->start));
+					break;
+				case fnv1a32("denoise"):
+					// TODO: not supported by original library
+					sensor->set_denoise(sensor, atoi(input + value_token->start));
+					break;
 
-			case fnv1a32("gain_ceiling"): {
-				// Clamp value here, because - unlike other params - the library doesn't do that,
-				// expecting users to use values from enum to prevent invalid state...
-				int value = atoi(buffer + value_token->start);
-				if (value < 0) value = 0; else if (value > 6) value = 6;
-				sensor->set_gainceiling(sensor, static_cast<gainceiling_t>(value));
-				break;
-			}
-			case fnv1a32("agc"):
-				sensor->set_gain_ctrl(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
-			case fnv1a32("agc_gain"):
-				sensor->set_agc_gain(sensor, atoi(buffer + value_token->start));
-				break;
-
-			case fnv1a32("aec"):
-				sensor->set_exposure_ctrl(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
-			case fnv1a32("night"):
-			case fnv1a32("aec2"): // night mode of automatic gain control
-				sensor->set_aec2(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
-			case fnv1a32("ae_level"): 
-				sensor->set_ae_level(sensor, atoi(buffer + value_token->start));
-				break;
-			case fnv1a32("exposure"): {
-				buffer[value_token->end] = 0;
-				char* p = buffer + value_token->start;
-				if (*p == 'a') { // auto mode
-					sensor->set_exposure_ctrl(sensor, true);
-					while (*++p)
-						if (std::isdigit(*p) || *p == '-')
-							break;
-					sensor->set_ae_level(sensor, atoi(p));
+				case fnv1a32("gain_ceiling"): {
+					// Clamp value here, because - unlike other params - the library doesn't do that,
+					// expecting users to use values from enum to prevent invalid state...
+					int value = atoi(input + value_token->start);
+					if (value < 0) value = 0; else if (value > 6) value = 6;
+					sensor->set_gainceiling(sensor, static_cast<gainceiling_t>(value));
 					break;
 				}
-				sensor->set_exposure_ctrl(sensor, false);
-				[[fallthrough]];
+				case fnv1a32("agc"):
+					sensor->set_gain_ctrl(sensor, parseBooleanFast(input + value_token->start));
+					break;
+				case fnv1a32("agc_gain"):
+					sensor->set_agc_gain(sensor, atoi(input + value_token->start));
+					break;
+
+				case fnv1a32("aec"):
+					sensor->set_exposure_ctrl(sensor, parseBooleanFast(input + value_token->start));
+					break;
+				case fnv1a32("night"):
+				case fnv1a32("aec2"): // night mode of automatic gain control
+					sensor->set_aec2(sensor, parseBooleanFast(input + value_token->start));
+					break;
+				case fnv1a32("ae_level"): 
+					sensor->set_ae_level(sensor, atoi(input + value_token->start));
+					break;
+				case fnv1a32("exposure"): {
+					input[value_token->end] = 0;
+					char* p = input + value_token->start;
+					if (*p == 'a') { // auto mode
+						sensor->set_exposure_ctrl(sensor, true);
+						while (*++p)
+							if (std::isdigit(*p) || *p == '-')
+								break;
+						sensor->set_ae_level(sensor, atoi(p));
+						break;
+					}
+					sensor->set_exposure_ctrl(sensor, false);
+					[[fallthrough]];
+				}
+				case fnv1a32("aec_value"):
+					sensor->set_aec_value(sensor, atoi(input + value_token->start));
+					break;
+
+				case fnv1a32("awb"):
+					sensor->set_whitebal(sensor, parseBooleanFast(input + value_token->start));
+					break;
+				case fnv1a32("awb_gain"):
+					sensor->set_awb_gain(sensor, atoi(input + value_token->start));
+					break;
+				case fnv1a32("wb_mode"):
+					sensor->set_wb_mode(sensor, atoi(input + value_token->start));
+					break;
+				case fnv1a32("dcw"): // advanced auto white balance 
+					sensor->set_dcw(sensor, atoi(input + value_token->start));
+					break;
+
+				case fnv1a32("raw_gma"):
+					sensor->set_raw_gma(sensor, atoi(input + value_token->start));
+					break;
+				case fnv1a32("lenc"):
+					sensor->set_lenc(sensor, atoi(input + value_token->start));
+					break;
+
+				case fnv1a32("special"):
+				case fnv1a32("special_effect"):
+					sensor->set_special_effect(sensor, atoi(input + value_token->start));
+					break;
+
+				default:
+					ESP_LOGV(TAG_CONFIG_CAMERA, "Unknown field '%.*s' for camera config JSON object, ignoring.", 
+						key_token->end - key_token->start, input + key_token->start);
+					break;
 			}
-			case fnv1a32("aec_value"):
-				sensor->set_aec_value(sensor, atoi(buffer + value_token->start));
-				break;
-
-			case fnv1a32("awb"):
-				sensor->set_whitebal(sensor, parseBooleanFast(buffer + value_token->start));
-				break;
-			case fnv1a32("awb_gain"):
-				sensor->set_awb_gain(sensor, atoi(buffer + value_token->start));
-				break;
-			case fnv1a32("wb_mode"):
-				sensor->set_wb_mode(sensor, atoi(buffer + value_token->start));
-				break;
-			case fnv1a32("dcw"): // advanced auto white balance 
-				sensor->set_dcw(sensor, atoi(buffer + value_token->start));
-				break;
-
-			case fnv1a32("raw_gma"):
-				sensor->set_raw_gma(sensor, atoi(buffer + value_token->start));
-				break;
-			case fnv1a32("lenc"):
-				sensor->set_lenc(sensor, atoi(buffer + value_token->start));
-				break;
-
-			case fnv1a32("special"):
-			case fnv1a32("special_effect"):
-				sensor->set_special_effect(sensor, atoi(buffer + value_token->start));
-				break;
-
-			default:
-				ESP_LOGV(TAG_CONFIG_CAMERA, "Unknown field '%.*s' for camera config JSON object, ignoring.", 
-					key_token->end - key_token->start, buffer + key_token->start);
-				break;
 		}
+
+		// TODO: report invalid parameters somehow (i.e. out of bounds contrast/brightness values, invalid framesize etc.)
 	}
 
-	// TODO: report invalid parameters somehow (i.e. out of bounds contrast/brightness values, invalid framesize etc.)
+	if (output) {
+		*output_return = snprintf(
+			output, output_length,
+			"{"
+				"\"framesize\":%d,"
+				"\"pixformat\":%d,"
+				"\"quality\":%d,"
+				"\"bpc\":%d,"
+				"\"wpc\":%d,"
+				"\"hmirror\":%d,"
+				"\"vflip\":%d,"
+				"\"contrast\":%d,"
+				"\"brightness\":%d,"
+				"\"sharpness\":%d,"
+				"\"denoise\":%d,"
+				"\"gain_ceiling\":%d,"
+				"\"agc\":%d,"
+				"\"agc_gain\":%d,"
+				"\"aec\":%d,"
+				"\"aec2\":%d,"
+				"\"ae_level\":%d,"
+				"\"aec_value\":%d,"
+				"\"awb\":%d,"
+				"\"awb_gain\":%d,"
+				"\"wb_mode\":%d,"
+				"\"dcw\":%d,"
+				"\"raw_gma\":%d,"
+				"\"lenc\":%d,"
+				"\"special\":%d"
+			"}",
+			static_cast<uint8_t>(sensor->status.framesize),
+			static_cast<uint8_t>(sensor->pixformat),
+			sensor->status.quality,
+			sensor->status.bpc,
+			sensor->status.wpc,
+			sensor->status.hmirror,
+			sensor->status.vflip,
+			sensor->status.contrast,
+			sensor->status.brightness,
+			sensor->status.sharpness,
+			sensor->status.denoise,
+			sensor->status.gainceiling,
+			sensor->status.agc,
+			sensor->status.agc_gain,
+			sensor->status.aec,
+			sensor->status.aec2,
+			sensor->status.ae_level,
+			sensor->status.aec_value,
+			sensor->status.awb,
+			sensor->status.awb_gain,
+			sensor->status.wb_mode,
+			sensor->status.dcw,
+			sensor->status.raw_gma,
+			sensor->status.lenc,
+			sensor->status.special_effect
+		);
+	}
 
 	esp_camera_save_to_nvs(CAMERA_NVS_NAMESPACE);
 
