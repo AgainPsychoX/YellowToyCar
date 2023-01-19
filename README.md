@@ -62,25 +62,50 @@ Software consist of:
 
 	```json
 	{
-		"time": "",
-		"millis": 12345,
+		"time": "2023-01-12T23:49:03.348+0100", // Device time, synced using SNTP.
+		"rssi": -67, // Signal strength of AP the device is connected to, or 0 if not connected.
+		"uptime": 123456, // Microseconds passed from device boot.
 	}
 	```
 	<!-- TODO: Include actual example -->
 
 	</details><br/>
 
-* `/config` → Endpoint for querystring requests to set configuration. 
+* `/config` → Endpoint for requests to set configuration (JSON GET/POST API)
 
 	<details><summary>Details</summary><br/>
 
 	```json
 	{
-		"time": "",
-		"millis": 12345,
+		"network": {
+			"mode": "sta", // or "ap", or "nat" to make it work like router
+			"fallback": 10000, // duration after should fallback to hosting AP if cannot connect as station
+			"sta": {
+				"ssid": "YellowToyCar",
+				"psk": "AAaa11!!", // not included in response
+				"static": 0, // 1 if static IP is to be used in STA mode
+				"ip": "192.168.4.1",
+				"mask": 24, // as number or IP
+			},
+			"ap": {
+				"ssid": "YellowToyCar",
+				"psk": "AAaa11!!", // not included in response
+				"channel": 0, // channel to use for AP, 0 for automatic
+				"hidden": 0, 
+				"ip": "192.168.4.1",
+				"mask": 24, // as number or IP
+				"dhcp_lease": ["192.168.4.2", "192.168.4.20"], // hardcoded to some range
+			},
+			"gateway": "192.168.4.1",
+			"dns1": "1.1.1.1",
+			"dns2": "1.0.0.1",
+		},
+		"camera": {
+
+		},
 	}
 	```
-	Returns JSON of current configuration, if not changing anything.
+	Returns JSON of current configuration, if not changing anything. 
 
 	<!-- TODO: Include actual example -->
 
@@ -203,14 +228,24 @@ Software consist of:
 	+ Configuration API
 	+ Allow set static IP for station mode.
 	+ Configuration UI
-	+ Enter soft AP if couldn't connect to configured network.
-	+ Allow set IP and DHCP settings for AP mode.
+	+ Fallback timeout: Enter AP if couldn't connect as STA.
 	+ Check periodicity for configured network while in soft AP (unless someone connected to soft AP).
 	+ Detect connection dropped https://github.com/espressif/esp-idf/blob/master/examples/wifi/getting_started/softAP/main/softap_example_main.c#L33
 	+ Optionally allow entering soft AP if lost and cannot find configured network, by duration setting.
+	+ Allow set IP and DHCP settings for AP mode.
+	+ Allow change DNS settings.
+	+ Input sanitization, i.e. disallow using invalid IP addresses.
 	+ Captive portal when in AP mode.
 	+ Password protection (especially useful when connecting to open networks).
++ [SNTP time sync](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/system_time.html#sntp-time-synchronization)
 + Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
-
++ Isn't `COM8_AGC_EN` off by 1?
++ Camera parameters are better described in [CircuitPython bindings docs for the esp32_camera library](https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html).
++ Create our own `Kconfig` file to keep optional features there, including some debugging.
++ You can use NAT?! https://github.com/jonask1337/esp-idf-nat-example/blob/master/main/main.c
++ Use default C++ [`std::hash`](https://en.cppreference.com/w/cpp/utility/hash) (murmur most-likely, but might be more optimized than our `fnv1a32`)
++ There are like exact same 20 lines for loading current network settings in `http.cpp config_handler` and `network.cpp config_network`, but how do refactor it?
+	- Additional output buffer for config handling process would be nice, but we have limited memory.
+	- Moving it to some function/macro looks ugly.
 
 
