@@ -20,6 +20,8 @@ for extension in filetypes_to_gzip:
 for source_file_path in files_to_gzip:
 	target_file_path = source_file_path + '.gz'
 	if (os.path.exists(target_file_path)):
+		if (os.path.getmtime(source_file_path) <= os.path.getmtime(target_file_path)):
+			continue
 		os.remove(target_file_path)
 	print('Compressing web for embedding: ' + source_file_path)
 	gzip_file(source_file_path, target_file_path)
