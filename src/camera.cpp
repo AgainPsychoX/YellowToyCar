@@ -126,9 +126,6 @@ esp_err_t config_camera(
 	char* input, jsmntok_t* first_token,
 	char* output, size_t output_length, int* output_return
 ) {
-	if (unlikely(first_token->type != JSMN_OBJECT))
-		return ESP_FAIL;
-
 	sensor_t* sensor = esp_camera_sensor_get();
 	if (unlikely(!sensor)) {
 		ESP_LOGE(TAG_CONFIG_CAMERA, "Failed to get camera handle to set config");
@@ -137,6 +134,9 @@ esp_err_t config_camera(
 
 	if (input) {
 		for (size_t i = 0; i < first_token->size; i += 2) {
+			if (unlikely(first_token->type != JSMN_OBJECT))
+				return ESP_FAIL;
+
 			auto* key_token   = first_token + i + 1;
 			auto* value_token = first_token + i + 2;
 			printf("JSON parsing in config_network: key='%*s'\n", key_token->end - key_token->start, input + key_token->start);

@@ -66,41 +66,38 @@ class QuerystringCrawlerIterator
 
 	void forward() noexcept {
 		const char* p = keyStart;
-		if (!*p) return;
-		while (*p) {
+		for(;;) {
 			if (*p == '=') {
 				keyEnd = p;
-				break;
+				while (*++p)
+					if (*p == '&')
+						break;
+				valueEnd = p;
+				return;
 			}
-			if (*p == '&') {
+			if (*p == '&' || !*p) {
 				keyEnd = p;
 				valueEnd = keyEnd + 1; // will end up as 0 length value
 				return;
 			}
 			p++;
 		}
-		while (*++p) {
-			if (*p == '&') {
-				break;
-			}
-		}
-		valueEnd = p;
 	}
 
 public:
 	QuerystringCrawlerIterator(const char* position)
-		: keyStart(position), valueEnd(position)
+		: keyStart(position)
 	{
 		forward();
 	}
 
 	QuerystringCrawlerIterator& operator++() noexcept {
-		if (*valueEnd) {
+		if (*keyEnd && *valueEnd) {
 			keyStart = valueEnd + 1;
 			forward();
 		}
 		else {
-			keyStart = valueEnd;
+			keyStart = *keyEnd ? valueEnd : keyEnd;
 		}
 		return *this;
 	}
@@ -120,7 +117,7 @@ public:
 
 class QuerystringCrawler
 {
-	std::string_view view;
+	const std::string_view view;
 public:
 	using iterator = QuerystringCrawlerIterator;
 
@@ -129,10 +126,10 @@ public:
 	{}
 
 	iterator begin() const noexcept {
-		return iterator(this->view.data());
+		return iterator(std::cbegin(this->view));
 	}
 	iterator end() const noexcept {
-		return iterator(this->view.data() + this->view.length());
+		return iterator(std::cend(this->view));
 	}
 };
 
@@ -172,6 +169,7 @@ esp_err_t status_handler(httpd_req_t* req)
 		// TODO: add optional parameters to include other data, i.e. connected clients to our AP
 	}
 
+	size_t writtenLength;
 	if (detailedMode) {
 		wifi_sta_list_t sta_list;
 		if (esp_err_t err = esp_wifi_ap_get_sta_list(&sta_list); err != ESP_OK) {
@@ -180,56 +178,61 @@ esp_err_t status_handler(httpd_req_t* req)
 		}
 
 		char* position = buffer;
-		size_t remainingLength = bufferLength;
+		size_t remaining = bufferLength;
+
 		ret = snprintf(
-			position, remainingLength,
+			position, remaining,
 			"{"
 				"\"time\":\"%s\","
-				"\"rssi\":\"%d\","
+				"\"rssi\":%d,"
 				"\"uptime\":%llu,"
 				"\"stations\":[",
 			timeString,
 			ap.rssi,
 			esp_timer_get_time()
 		);
-		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remainingLength)) goto fail;
+		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto fail;
 		position += ret;
-		remainingLength -= ret;
+		remaining -= ret;
 
 		for (int i = 0; i < sta_list.num; i++) {
 			const wifi_sta_info_t& sta_info = sta_list.sta[i];
 			// TODO: look up for IP assigned by DHCP server
 			ret = snprintf(
-				position, remainingLength,
+				position, remaining,
 				"{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"rssi\":%d}%c",
 				mac_addr_printf(sta_info.mac),
 				sta_info.rssi,
 				(i + 1 < sta_list.num) ? ',' : ' '
 			);
-			if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remainingLength)) goto fail;
+			if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto fail;
 			position += ret;
-			remainingLength -= ret;
+			remaining -= ret;
 		}
 
-		ret = snprintf(position, remainingLength, "]}");
-		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remainingLength)) goto fail;
+		ret = snprintf(position, remaining, "]}");
+		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto fail;
+
+		writtenLength = (position + ret) - buffer;
 	}
 	else /* simple mode */ {
 		ret = snprintf(
 			buffer, bufferLength,
 			"{"
 				"\"time\":\"%s\","
-				"\"rssi\":\"%d\","
+				"\"rssi\":%d,"
 				"\"uptime\":%llu"
 			"}",
 			timeString,
 			ap.rssi,
 			esp_timer_get_time()
 		);
+		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto fail;
+
+		writtenLength = ret;
 	}
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto fail;
 	httpd_resp_set_type(req, "application/json");
-	httpd_resp_send(req, buffer, ret);
+	httpd_resp_send(req, buffer, writtenLength);
 	return ESP_OK;
 
 	fail:
@@ -316,31 +319,40 @@ esp_err_t config_handler(httpd_req_t* req)
 	////////////////////////////////////////////////////////////////////////////////
 	// Response with current configuration as JSON
 
-	size_t bytes_written = 0;
+	char* position = buffer;
+	size_t remaining = bufferLength;
+
 	ret = snprintf(
-		buffer, bufferLength,
+		position, remaining,
 		"{"
-			"\"uptime\":%llu"
+			"\"uptime\":%llu,"
 			"\"network\":",
 		esp_timer_get_time()
 	);
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto other_fail;
-	bytes_written += ret;
+	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
+	position += ret;
+	remaining -= ret;
 
-	config_network(nullptr, nullptr, buffer + bytes_written, bufferLength - bytes_written, &ret);
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto other_fail;
-	bytes_written += ret;
+	config_network(nullptr, nullptr, position, remaining, &ret);
+	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
+	position += ret;
+	remaining -= ret;
 
-	bytes_written += sprintf(buffer + bytes_written, ",\"camera\":");
+	ret = snprintf(position, remaining, ",\"camera\":");
+	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
+	position += ret;
+	remaining -= ret;
 
-	config_camera(nullptr, nullptr, buffer + bytes_written, bufferLength - bytes_written, &ret);
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto other_fail;
-	bytes_written += ret;
+	config_camera(nullptr, nullptr, position, remaining, &ret);
+	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
+	position += ret;
+	remaining -= ret;
 
-	buffer[bytes_written++] = '}';
+	if (unlikely(remaining < 1)) goto other_fail;
+	*position++ = '}';
 
 	httpd_resp_set_type(req, "application/json");
-	httpd_resp_send(req, buffer, ret);
+	httpd_resp_send(req, buffer, static_cast<size_t>(position - buffer));
 	printf("uxTaskGetStackHighWaterMark(NULL) for config_handler: %u\n", uxTaskGetStackHighWaterMark(NULL));
 	return ESP_OK;
 

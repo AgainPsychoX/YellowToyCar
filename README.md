@@ -241,9 +241,10 @@ Software consist of:
 + Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
 + Isn't `COM8_AGC_EN` off by 1?
 + Camera parameters are better described in [CircuitPython bindings docs for the esp32_camera library](https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html).
-+ Create our own `Kconfig` file to keep optional features there, including some debugging.
++ Create our own `Kconfig` file to keep optional features there, including some debugging. Also see https://esp32tutorials.com/esp32-static-fixed-ip-address-esp-idf/ 
 + You can use NAT?! https://github.com/jonask1337/esp-idf-nat-example/blob/master/main/main.c
 + Use default C++ [`std::hash`](https://en.cppreference.com/w/cpp/utility/hash) (murmur most-likely, but might be more optimized than our `fnv1a32`)
 + Use `std::` over C stuff where possible, please?
++ Create fast and C++ `constexpr` string to IP 4 function
 
 

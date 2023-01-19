@@ -80,10 +80,17 @@ void init_network()
 		}
 		if (unlikely(load_ip_info_from_nvs(*nvs_handle, WIFI_IF_STA, sta_ip_info) != ESP_OK)) {
 			ESP_LOGV(TAG_INIT_NETWORK, "Missing IP info for %s interface, using defaults", "STA");
-			esp_netif_t* sta_netif = esp_netif_create_default_wifi_sta();
-			esp_netif_get_ip_info(sta_netif, &ap_ip_info);
-			save_ip_info_to_nvs(*nvs_handle, WIFI_IF_STA, sta_ip_info);
-			esp_netif_destroy_default_wifi(sta_netif);
+			// Note: DHCP client is used on default, so use preset to avoid uninitialized garbage.
+			// esp_netif_t* sta_netif = esp_netif_create_default_wifi_sta();
+			// esp_netif_get_ip_info(sta_netif, &ap_ip_info);
+			// save_ip_info_to_nvs(*nvs_handle, WIFI_IF_STA, sta_ip_info);
+			// esp_netif_destroy_default_wifi(sta_netif);
+			esp_netif_ip_info_t preset = {
+				.ip = {0},
+				.netmask = {PP_HTONL(0xFFFFFF00)},
+				.gw = {0},
+			};
+			save_ip_info_to_nvs(*nvs_handle, WIFI_IF_STA, preset);
 		}
 
 		wifi_mode_t mode;
@@ -322,9 +329,6 @@ esp_err_t config_network(
 	char* input, jsmntok_t* first_token,
 	char* output, size_t output_length, int* output_return
 ) {
-	if (unlikely(first_token->type != JSMN_OBJECT))
-		return ESP_FAIL;
-
 	esp_err_t nvs_result;
 	std::shared_ptr<nvs::NVSHandle> nvs_handle = nvs::open_nvs_handle(NETWORK_MISC_NVS_NAMESPACE, NVS_READWRITE, &nvs_result);
 	if (unlikely(nvs_result != ESP_OK)) return nvs_result;
@@ -347,6 +351,9 @@ esp_err_t config_network(
 	ESP_IGNORE_ERROR(nvs_handle->get_item("fallback",   reinterpret_cast<uint8_t&>(fallback)));
 
 	if (input) {
+		if (unlikely(first_token->type != JSMN_OBJECT))
+			return ESP_FAIL;
+
 		for (size_t i = 0; i < first_token->size; i += 2) {
 			auto* key_token   = first_token + i + 1;
 			auto* value_token = first_token + i + 2;
