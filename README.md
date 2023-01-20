@@ -58,16 +58,18 @@ Software consist of:
 
 * `/status` → Basic status, including time, lights & motors state and other diagnostic data.
 
-	<details><summary>Example response</summary><br/>
+	<details><summary>Details</summary><br/>
 
 	```json
 	{
+		"uptime": 123456, // Microseconds passed from device boot.
 		"time": "2023-01-12T23:49:03.348+0100", // Device time, synced using SNTP.
 		"rssi": -67, // Signal strength of AP the device is connected to, or 0 if not connected.
-		"uptime": 123456, // Microseconds passed from device boot.
+
+		/* With `?details=1` querystring parameter, extended response is provided. */
+		"stations": ["a1:b2:c3:d4:e5:f6"], // list of stations currently connected to our AP
 	}
 	```
-	<!-- TODO: Include actual example -->
 
 	</details><br/>
 
@@ -77,37 +79,73 @@ Software consist of:
 
 	```json
 	{
+		/* Networking related. Some things are not implemented, including: DNS and DHCP leases */
 		"network": {
-			"mode": "sta", // or "ap", or "nat" to make it work like router
+			"mode": "ap", // for Access Point or "sta" for station mode, or "nat" (to make it work like router)
 			"fallback": 10000, // duration after should fallback to hosting AP if cannot connect as station
+			"dns1": "1.1.1.1",
+			"dns2": "1.0.0.1",
 			"sta": {
 				"ssid": "YellowToyCar",
-				"psk": "AAaa11!!", // not included in response
+				"psk": "AAaa11!!",
 				"static": 0, // 1 if static IP is to be used in STA mode
 				"ip": "192.168.4.1",
 				"mask": 24, // as number or IP
+				"gateway": "192.168.4.1"
 			},
 			"ap": {
 				"ssid": "YellowToyCar",
-				"psk": "AAaa11!!", // not included in response
+				"psk": "AAaa11!!",
 				"channel": 0, // channel to use for AP, 0 for automatic
-				"hidden": 0, 
+				"hidden": 0,
 				"ip": "192.168.4.1",
 				"mask": 24, // as number or IP
-				"dhcp_lease": ["192.168.4.2", "192.168.4.20"], // hardcoded to some range
+				"gateway": "192.168.4.1",
+				"dhcp": {
+					"enabled": 1,
+					"lease": ["192.168.4.1", "192.168.4.20"],
+				}
 			},
-			"gateway": "192.168.4.1",
-			"dns1": "1.1.1.1",
-			"dns2": "1.0.0.1",
+			"sntp": {
+				"pool": "pl.pool.ntp.org",
+				"tz": "CET-1CEST,M3.5.0,M10.5.0/3",
+				"interval": 3600000
+			}
 		},
+		/* Camera settings. See this project or `esp32_camera` library sources for details. */
 		"camera": {
-
-		},
+			"framesize": 13,
+			"pixformat": 4,
+			"quality": 12,
+			"bpc": 0,
+			"wpc": 1,
+			"hmirror": 0,
+			"vflip": 0,
+			"contrast": 0,
+			"brightness": 0,
+			"sharpness": 0,
+			"denoise": 0,
+			"gain_ceiling": 0,
+			"agc": 1,
+			"agc_gain": 0,
+			"aec": 1,
+			"aec2": 0,
+			"ae_level": 0,
+			"aec_value": 168,
+			"awb": 1,
+			"awb_gain": 1,
+			"wb_mode": 0,
+			"dcw": 1,
+			"raw_gma": 1,
+			"lenc": 1,
+			"special": 0
+		}
 	}
 	```
 	Returns JSON of current configuration, if not changing anything. 
 
-	<!-- TODO: Include actual example -->
+	* For AP mode, default IP/gateway should stay `192.168.4.1` for now, as DHCP settings are hardcoded to some default values.
+	* DNS, SNTP and NAT settings are also not implemented yet.
 
 	</details><br/>
 
@@ -161,7 +199,7 @@ Software consist of:
 		<tr>
 			<td>4</td>
 			<td>32</td>
-			<td colspan="2">(UDP) Lengtd</td>
+			<td colspan="2">(UDP) Length</td>
 			<td colspan="2">(UDP) Checksum</td>
 		</tr>
 		<tr>
@@ -238,13 +276,18 @@ Software consist of:
 	+ Captive portal when in AP mode.
 	+ Password protection (especially useful when connecting to open networks).
 + [SNTP time sync](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/system_time.html#sntp-time-synchronization)
+	+ Make pool server and timezone configurable
 + Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
 + Isn't `COM8_AGC_EN` off by 1?
 + Camera parameters are better described in [CircuitPython bindings docs for the esp32_camera library](https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html).
 + Create our own `Kconfig` file to keep optional features there, including some debugging. Also see https://esp32tutorials.com/esp32-static-fixed-ip-address-esp-idf/ 
-+ You can use NAT?! https://github.com/jonask1337/esp-idf-nat-example/blob/master/main/main.c
++ You can use NAT?! 
+	+ https://github.com/jonask1337/esp-idf-nat-example/blob/master/main/main.c 
+	+ https://github.com/espressif/esp-lwip/blob/6132c9755a43d4e04de4457f1558ced415756e4d/src/core/ipv4/ip4_napt.c#L228
 + Use default C++ [`std::hash`](https://en.cppreference.com/w/cpp/utility/hash) (murmur most-likely, but might be more optimized than our `fnv1a32`)
 + Use `std::` over C stuff where possible, please?
 + Create fast and C++ `constexpr` string to IP 4 function
++ How do we nicely pass understandable error, i.e. from parsing config to response? https://github.com/TartanLlama/expected 👀
++ How does JSMN JSON handle escaping characters? Some strings like SSID/PSK might be invalid...
 
 

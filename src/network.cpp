@@ -441,13 +441,6 @@ esp_err_t config_network(
 						}
 						break;
 					}
-					case fnv1a32("gateway"): {
-						input[value_token->end] = 0;
-						if (esp_netif_str_to_ip4(input + value_token->start, &ap_ip_info.gw) != ESP_OK)
-							return ESP_FAIL;
-						sta_ip_info.gw = ap_ip_info.gw;
-						break;
-					}
 					default:
 						ESP_LOGD(TAG_CONFIG_NETWORK, "Unknown field '%.*s', ignoring.", 
 							key_token->end - key_token->start, input + key_token->start);
@@ -506,9 +499,6 @@ esp_err_t config_network(
 			"{"
 				"\"mode\":\"%s\","
 				"\"fallback\":%u,"
-				"\"gateway\":\"%u.%u.%u.%u\","
-				// "\"dns1\":\"%u.%u.%u.%u\","
-				// "\"dns2\":\"%u.%u.%u.%u\""
 				"\"sta\":{"
 					"\"ssid\":\"%.32s\","
 					"\"psk\":\"%.64s\","
@@ -529,7 +519,6 @@ esp_err_t config_network(
 			"}",
 			wifi_mode_to_cstr(mode),
 			fallback,
-			ip4_addr_printf_unpack(&sta_ip_info.gw),
 			/* network.sta */
 			sta_config.ssid,
 			sta_config.password,

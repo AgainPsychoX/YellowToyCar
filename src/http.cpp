@@ -311,18 +311,18 @@ esp_err_t status_handler(httpd_req_t* req)
 		ap.rssi = 0;
 	}
 
+	// For now, just use this simple version for detailed mode
+	bool detailedMode = std::strstr(req->uri, "?detail") != nullptr;
 	// Parse querystring
-	// bool detailedMode = std::strstr(req->uri, "?detail") != nullptr;
-	bool detailedMode = false;
-	for (auto&& [key, value] : QuerystringCrawler(skipToQuerystring(req->uri).data())) {
-		switch (fnv1a32(key.begin(), key.end())) {
-			case fnv1a32("details"): {
-				detailedMode = true;
-				break;
-			}
-		}
-		// TODO: add optional parameters to include other data, i.e. connected clients to our AP
-	}
+	// bool detailedMode = false;
+	// for (auto&& [key, value] : QuerystringCrawler(skipToQuerystring(req->uri).data())) {
+	// 	switch (fnv1a32(key.begin(), key.end())) {
+	// 		case fnv1a32("details"): {
+	// 			detailedMode = true;
+	// 			break;
+	// 		}
+	// 	}
+	// }
 
 	size_t writtenLength;
 	if (detailedMode) {
@@ -338,13 +338,13 @@ esp_err_t status_handler(httpd_req_t* req)
 		ret = snprintf(
 			position, remaining,
 			"{"
+				"\"uptime\":%llu,"
 				"\"time\":\"%s\","
 				"\"rssi\":%d,"
-				"\"uptime\":%llu,"
 				"\"stations\":[",
+			esp_timer_get_time(),
 			timeString,
-			ap.rssi,
-			esp_timer_get_time()
+			ap.rssi
 		);
 		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto fail;
 		position += ret;
@@ -374,13 +374,13 @@ esp_err_t status_handler(httpd_req_t* req)
 		ret = snprintf(
 			buffer, bufferLength,
 			"{"
+				"\"uptime\":%llu,"
 				"\"time\":\"%s\","
-				"\"rssi\":%d,"
-				"\"uptime\":%llu"
+				"\"rssi\":%d"
 			"}",
+			esp_timer_get_time(),
 			timeString,
-			ap.rssi,
-			esp_timer_get_time()
+			ap.rssi
 		);
 		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= bufferLength)) goto fail;
 
