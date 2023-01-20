@@ -23,6 +23,14 @@ constexpr char tolower(const char c) {
     return (c < 'A' || 'Z' < c) ? c : c + ('a' - 'A');
 }
 
+constexpr uint32_t saturatedSubtract(uint32_t x, uint32_t y)
+{
+	uint32_t res = x - y;
+	res &= -(res <= x);
+	return res;
+}
+static_assert(saturatedSubtract(3, 7) == 0);
+
 // FNV1a 32 hashing
 constexpr uint32_t fnv1a32(const char* s) {
 	uint32_t hash = 2166136261u;

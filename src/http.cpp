@@ -134,6 +134,162 @@ public:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+// Configuration 
+
+static const char* TAG_CONFIG_ROOT = "config-root";
+
+inline bool has_simple_value(const jsmntok_t* token)
+{
+	if (token->type == JSMN_UNDEFINED) return false;
+	if (token->type == JSMN_OBJECT) return false;
+	if (token->type == JSMN_ARRAY) return false;
+	return true;
+}
+
+esp_err_t config_network(
+	char* input, jsmntok_t* root,
+	char* output, size_t output_length, int* output_return); // from network.cpp
+esp_err_t config_camera(
+	char* input, jsmntok_t* root,
+	char* output, size_t output_length, int* output_return); // from camera.cpp
+
+/// @brief Applies (and/or reads current) JSON configuration for the whole app.
+/// @param[in] input Buffer with JSON data that was parsed into JSON into tokens.
+///		Note: Passed non-const to allow in-place strings manipulation.
+/// @param[in] root JSMN JSON object token related to the config to be parsed.
+/// @param[out] output Optional buffer for writing JSON with current configuration.
+/// @param[in] output_length Length of output buffer.
+/// @param[out] output_return Used to return number of bytes that would be written 
+/// 	to the output, or negative for error. Basically `printf`-like return.
+/// @return 
+esp_err_t config_root(
+	char* input, jsmntok_t* root,
+	char* output, size_t output_length, int* output_return
+) {
+	if (input) {
+		if (unlikely(root->type != JSMN_OBJECT))
+			return ESP_FAIL;
+		if (unlikely(root->size < 1)) 
+			return ESP_FAIL;
+		for (jsmntok_t* token = root + 1;;) {
+			auto* key_token   = token;
+			auto* value_token = token + 1;
+			ESP_LOGV(TAG_CONFIG_ROOT, "key='%.*s' value='%.*s'", 
+				key_token->end - key_token->start, input + key_token->start,
+				value_token->end - value_token->start, input + value_token->start
+			);
+
+			// Dispatch based on type and key
+			const auto key_hash = fnv1a32(input + key_token->start, input + key_token->end);
+			if (value_token->type == JSMN_OBJECT) {
+				ESP_LOGV(TAG_CONFIG_ROOT, "type=object size=%zu", value_token->size);
+				switch (key_hash) {
+					case fnv1a32("network"): {
+						if (config_network(input, value_token, nullptr, 0, nullptr) != ESP_OK)
+							return ESP_FAIL;
+						break;
+					}
+					case fnv1a32("camera"): {
+						if (config_camera(input, value_token, nullptr, 0, nullptr) != ESP_OK)
+							return ESP_FAIL;
+						break;
+					}
+					case fnv1a32("control"): {
+						// TODO: controls via config handler?
+						break;
+					}
+					default:
+						ESP_LOGD(TAG_CONFIG_ROOT, "Unknown field '%.*s', ignoring.", 
+							key_token->end - key_token->start, input + key_token->start);
+						break;
+				}
+
+				// Skip object
+				jsmntok_t* other = value_token + 1;
+				while(1) {
+					if (root->end < other->end)
+						goto done;
+					if (value_token->end < other->end) {
+						break;
+					}
+					other++;
+				}
+				token = other;
+			}
+			else {
+				if (unlikely(!has_simple_value(value_token)))
+					return ESP_FAIL;
+
+				switch (key_hash) {
+					case fnv1a32("reset"): {
+						if (parseBooleanFast(input + value_token->start)) {
+							// TODO: reset safely
+						}
+						break;
+					}
+					default:
+						ESP_LOGD(TAG_CONFIG_ROOT, "Unknown field '%.*s', ignoring.", 
+							key_token->end - key_token->start, input + key_token->start);
+						break;
+				}
+
+				// Skip primitive pair (key & value)
+				token += 2;
+				if (root->end < token->end)
+					goto done;
+			}
+		}
+		done: /* semicolon for empty statement */ ;
+	}
+
+	if (output_return) {
+		int ret;
+		char* position = output;
+		size_t remaining = output_length;
+
+		ret = snprintf(
+			position, remaining,
+			"{"
+				"\"uptime\":%llu,"
+				"\"network\":",
+			esp_timer_get_time()
+		);
+		if (unlikely(ret < 0)) goto output_fail;
+		position += ret;
+		remaining = saturatedSubtract(remaining, ret);
+
+		config_network(nullptr, nullptr, position, remaining, &ret);
+		if (unlikely(ret < 0)) goto output_fail;
+		position += ret;
+		remaining = saturatedSubtract(remaining, ret);
+
+		ret = snprintf(position, remaining, ",\"camera\":");
+		if (unlikely(ret < 0)) goto output_fail;
+		position += ret;
+		remaining = saturatedSubtract(remaining, ret);
+
+		config_camera(nullptr, nullptr, position, remaining, &ret);
+		if (unlikely(ret < 0)) goto output_fail;
+		position += ret;
+		remaining = saturatedSubtract(remaining, ret);
+
+		if (unlikely(remaining < 1)) 
+			position++;
+		else
+			*position++ = '}';
+
+		*output_return = position - output;
+		return ESP_OK;
+
+		output_fail:
+		*output_return = -1;
+		return ESP_FAIL;
+	}
+
+	return ESP_OK;
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // Main web server
 
 static const char* TAG_HTTPD_MAIN = "httpd-main";
@@ -159,7 +315,6 @@ esp_err_t status_handler(httpd_req_t* req)
 	// bool detailedMode = std::strstr(req->uri, "?detail") != nullptr;
 	bool detailedMode = false;
 	for (auto&& [key, value] : QuerystringCrawler(skipToQuerystring(req->uri).data())) {
-		printf("status querystring key='%*s'\n", key.length(), key.data());
 		switch (fnv1a32(key.begin(), key.end())) {
 			case fnv1a32("details"): {
 				detailedMode = true;
@@ -240,9 +395,6 @@ esp_err_t status_handler(httpd_req_t* req)
 	return ESP_FAIL;
 }
 
-esp_err_t config_network(char* input, jsmntok_t* first_token, char* output, size_t output_length, int* bytes_written); // from network.cpp
-esp_err_t config_camera(char* input, jsmntok_t* first_token, char* output, size_t output_length, int* bytes_written); // from camera.cpp
-
 esp_err_t config_handler(httpd_req_t* req)
 {
 	int ret;
@@ -267,7 +419,7 @@ esp_err_t config_handler(httpd_req_t* req)
 		jsmntok_t tokens[128]; 
 		const size_t max_tokens = sizeof(tokens) / sizeof(tokens[0]);
 		jsmn_init(&parser);
-		ret = jsmn_parse(&parser, buffer, bytes_received, tokens, max_tokens);
+		ret = jsmn_parse(&parser, buffer, bytes_received, tokens, max_tokens - 1);
 		if (ret <= 0) {
 			if (ret == JSMN_ERROR_NOMEM)
 				// TODO: Ask esp-idf to support "413 Payload Too Large" https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/413
@@ -276,90 +428,34 @@ esp_err_t config_handler(httpd_req_t* req)
 				httpd_resp_send_500(req);
 			return ESP_FAIL;
 		}
-		const size_t tokens_count = ret;
 
-		for (size_t i = 0; i < tokens_count; i += 2) {
-			const auto* key_token   = tokens + i + 1;
-			const auto* value_token = tokens + i + 2;
-			printf("JSON parsing in config_handler: key='%*s'\n", key_token->end - key_token->start, buffer + key_token->start);
-			switch (fnv1a32(buffer + key_token->start, buffer + key_token->end)) {
-				case fnv1a32("network"): {
-					if (config_network(buffer, tokens, nullptr, 0, nullptr) != ESP_OK) {
-						// TODO: how do we nicely pass understandable error? https://github.com/TartanLlama/expected 👀
-						httpd_resp_send_500(req);
-						return ESP_FAIL;
-					}
-					break;
-				}
-				case fnv1a32("camera"): {
-					if (config_camera(buffer, tokens, nullptr, 0, nullptr) != ESP_OK) {
-						httpd_resp_send_500(req);
-						return ESP_FAIL;
-					}
-					break;
-				}
-				case fnv1a32("control"): {
-					// TODO: controls via config handler?
-					break;
-				}
-				case fnv1a32("reset"): {
-					if (parseBooleanFast(buffer + value_token->start)) {
-						// TODO: reset safely
-					}
-					break;
-				}
-				default:
-					ESP_LOGV(TAG_HTTPD_MAIN, "Unknown field '%.*s' on root level of config JSON, ignoring.", 
-						key_token->end - key_token->start, buffer + key_token->start);
-					break;
-			}
+		// Add guard token (useful for skipping objects in parsing)
+		tokens[ret].end = std::numeric_limits<decltype(jsmntok_t::end)>::max();
+
+		const size_t tokens_count = ret + 1;
+		ESP_LOGV(TAG_HTTPD_MAIN, "config_handler! bytes_received=%zu tokens_count=%zu", bytes_received, tokens_count);
+
+		if (config_root(buffer, tokens, nullptr, 0, nullptr) != ESP_OK) {
+			httpd_resp_send_500(req);
+			return ESP_FAIL;
 		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
 	// Response with current configuration as JSON
 
-	char* position = buffer;
-	size_t remaining = bufferLength;
-
-	ret = snprintf(
-		position, remaining,
-		"{"
-			"\"uptime\":%llu,"
-			"\"network\":",
-		esp_timer_get_time()
-	);
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
-	position += ret;
-	remaining -= ret;
-
-	config_network(nullptr, nullptr, position, remaining, &ret);
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
-	position += ret;
-	remaining -= ret;
-
-	ret = snprintf(position, remaining, ",\"camera\":");
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
-	position += ret;
-	remaining -= ret;
-
-	config_camera(nullptr, nullptr, position, remaining, &ret);
-	if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto other_fail;
-	position += ret;
-	remaining -= ret;
-
-	if (unlikely(remaining < 1)) goto other_fail;
-	*position++ = '}';
+	if (unlikely(
+		config_root(nullptr, nullptr, buffer, bufferLength, &ret) != ESP_OK ||
+	    ret < 0 || static_cast<size_t>(ret) >= bufferLength
+	)) {
+		httpd_resp_send_500(req);
+		return ESP_FAIL;
+	};
+	const size_t bytes_written = ret;
 
 	httpd_resp_set_type(req, "application/json");
-	httpd_resp_send(req, buffer, static_cast<size_t>(position - buffer));
-	printf("uxTaskGetStackHighWaterMark(NULL) for config_handler: %u\n", uxTaskGetStackHighWaterMark(NULL));
+	httpd_resp_send(req, buffer, bytes_written);
 	return ESP_OK;
-
-	other_fail:
-	httpd_resp_send_500(req);
-	printf("uxTaskGetStackHighWaterMark(NULL) for config_handler: %u\n", uxTaskGetStackHighWaterMark(NULL));
-	return ESP_FAIL;
 }
 
 esp_err_t capture_handler(httpd_req_t* req)

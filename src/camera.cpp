@@ -116,14 +116,14 @@ framesize_t parse_framesize(const char* str)
 /// @brief Applies (and/or reads current) JSON configuration for camera.
 /// @param[in] input Buffer with JSON data that was parsed into JSON into tokens.
 ///		Note: Passed non-const to allow in-place strings manipulation.
-/// @param[in] first_token First JSMN JSON token related to the config to be parsed.
+/// @param[in] root JSMN JSON object token related to the config to be parsed.
 /// @param[out] output Optional buffer for writing JSON with current configuration.
 /// @param[in] output_length Length of output buffer.
 /// @param[out] output_return Used to return number of bytes that would be written 
 /// 	to the output, or negative for error. Basically `printf`-like return.
 /// @return 
 esp_err_t config_camera(
-	char* input, jsmntok_t* first_token,
+	char* input, jsmntok_t* root,
 	char* output, size_t output_length, int* output_return
 ) {
 	sensor_t* sensor = esp_camera_sensor_get();
@@ -133,13 +133,18 @@ esp_err_t config_camera(
 	}
 
 	if (input) {
-		for (size_t i = 0; i < first_token->size; i += 2) {
-			if (unlikely(first_token->type != JSMN_OBJECT))
-				return ESP_FAIL;
+		if (unlikely(root->type != JSMN_OBJECT))
+			return ESP_FAIL;
+		if (unlikely(root->size < 1)) 
+			return ESP_FAIL;
+		for (jsmntok_t* token = root + 1;;) {
+			auto* key_token   = token;
+			auto* value_token = token + 1;
+			ESP_LOGV(TAG_CONFIG_CAMERA, "key='%.*s' value='%.*s'", 
+				key_token->end - key_token->start, input + key_token->start,
+				value_token->end - value_token->start, input + value_token->start
+			);
 
-			auto* key_token   = first_token + i + 1;
-			auto* value_token = first_token + i + 2;
-			printf("JSON parsing in config_network: key='%*s'\n", key_token->end - key_token->start, input + key_token->start);
 			if (unlikely(!has_simple_value(value_token)))
 				return ESP_FAIL;
 			switch (fnv1a32(input + key_token->start, input + key_token->end)) {
@@ -254,16 +259,22 @@ esp_err_t config_camera(
 					break;
 
 				default:
-					ESP_LOGV(TAG_CONFIG_CAMERA, "Unknown field '%.*s' for camera config JSON object, ignoring.", 
+					ESP_LOGD(TAG_CONFIG_CAMERA, "Unknown field '%.*s', ignoring.", 
 						key_token->end - key_token->start, input + key_token->start);
 					break;
 			}
+
+			// Skip primitive pair (key & value)
+			token += 2;
+			if (root->end < token->end)
+				goto done;
 		}
+		done: /* semicolon for empty statement */ ;
 
 		// TODO: report invalid parameters somehow (i.e. out of bounds contrast/brightness values, invalid framesize etc.)
 	}
 
-	if (output) {
+	if (output_return) {
 		*output_return = snprintf(
 			output, output_length,
 			"{"
