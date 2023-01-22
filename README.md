@@ -69,9 +69,7 @@ Software consist of:
 
 * `/status` → Basic status, including time, lights & motors state and other diagnostic data.
 
-	<details><summary>Details</summary><br/>
-
-	```json
+	```json5
 	{
 		"uptime": 123456, // Microseconds passed from device boot.
 		"time": "2023-01-12T23:49:03.348+0100", // Device time, synced using SNTP.
@@ -82,13 +80,9 @@ Software consist of:
 	}
 	```
 
-	</details><br/>
-
 * `/config` → Endpoint for requests to set configuration (JSON GET/POST API)
 
-	<details><summary>Details</summary><br/>
-
-	```json
+	```json5
 	{
 		/* Control & config for motors and lights */
 		"control": {
@@ -174,11 +168,7 @@ Software consist of:
 	* For AP mode, default IP/gateway should stay `192.168.4.1` for now, as DHCP settings are hardcoded to some default values.
 	* DNS, SNTP and NAT settings are also not implemented yet.
 
-	</details><br/>
-
 * `/drive` → Basic controls endpoint, might be lagging as it's over HTTP, which uses TCP, which might retransmit old requests).
-
-	<details><summary>Details</summary><br/>
 
 	Querystring API:
 	```c
@@ -188,8 +178,6 @@ Software consist of:
 	&right=255      // Right motor duty and direction (negative values for backward)
 	```
 	Returns nothing.
-
-	</details><br/>
 
 * `/capture` → Frame capture from the car camera.
 
@@ -347,56 +335,56 @@ Software consist of:
 
 ### To-do
 
-+ Files:
-	+ `main.cpp` externs everything, initializes everything, starts everything...
-	+ `http.cpp` servers handlers (both main & streaming)
-	+ `udp.cpp` whole UDP fast control server, externs state.
-	+ `hal.cpp` abstraction over motors and lights.
++ Tests:
+	+ WiFi STA mode
+	+ UDP connection when switching WiFi AP to STA
++ Consider using default C++ [`std::hash`](https://en.cppreference.com/w/cpp/utility/hash) (murmur most-likely, but might be more optimized than our `fnv1a32`)
++ Use `std::` over C stuff where possible, please?
++ Detailed status output, including debug stuff
+	+ Process list and stats.
+	+ Memory heap usage & fragmentation.
+	+ Networking stats (packet counts?)
 + Min-max tasks:
 	+ CPU pins:
 		+ One core for HTTP and trash tasks
 		+ Other core for networking & fast control (UDP)
 	+ Use mutex to lock frame buffer between capture and streaming.
 	+ Trace tasks? `vTaskList`/`uxTaskGetSystemState`
++ Website
+	+ Camera
+	+ Basic controls
+	+ Network settings
+	+ Camera settings
+	+ Motors calibration
 + Networking
-	+ Configuration API
-	+ Allow set static IP for station mode.
-	+ Configuration UI
 	+ Fallback timeout: Enter AP if couldn't connect as STA.
 	+ Check periodicity for configured network while in soft AP (unless someone connected to soft AP).
 	+ Detect connection dropped https://github.com/espressif/esp-idf/blob/master/examples/wifi/getting_started/softAP/main/softap_example_main.c#L33
 	+ Optionally allow entering soft AP if lost and cannot find configured network, by duration setting.
 	+ Allow set IP and DHCP settings for AP mode.
 	+ Allow change DNS settings.
-	+ Input sanitization, i.e. disallow using invalid IP addresses.
 	+ Captive portal when in AP mode.
 	+ Password protection (especially useful when connecting to open networks).
-+ If password was to be implemented, don't forget to secure UDP server somehow.
-+ Should there be status/echo packet types for UDP?
+	+ If password was to be implemented, don't forget to secure UDP server somehow.
 + [SNTP time sync](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/system_time.html#sntp-time-synchronization)
 	+ Make pool server and timezone configurable
-+ Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
-+ Isn't `COM8_AGC_EN` in the camera registers definitions off by 1? 
-+ Detailed status output, including debug stuff
-	+ Process list and stats.
-	+ Memory heap usage & fragmentation.
-	+ NVS dump. See https://github.com/AFontaine79/Espressif-NVS-Analyzer
-	+ Networking stats.
-+ Camera parameters are better described in [CircuitPython bindings docs for the esp32_camera library](https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html).
 + Create our own `Kconfig` file to keep optional features there, including some debugging. Also see https://esp32tutorials.com/esp32-static-fixed-ip-address-esp-idf/ 
-+ You can use NAT?! 
-	+ https://github.com/jonask1337/esp-idf-nat-example/blob/master/main/main.c 
-	+ https://github.com/espressif/esp-lwip/blob/6132c9755a43d4e04de4457f1558ced415756e4d/src/core/ipv4/ip4_napt.c#L228
-+ Use default C++ [`std::hash`](https://en.cppreference.com/w/cpp/utility/hash) (murmur most-likely, but might be more optimized than our `fnv1a32`)
-+ Use `std::` over C stuff where possible, please?
-+ Create fast and C++ `constexpr` string to IP 4 function
-+ How do we nicely pass understandable error, i.e. from parsing config to response? https://github.com/TartanLlama/expected 👀
-+ How does JSMN JSON handle escaping characters? Some strings like SSID/PSK might be invalid...
 + Allow some calibration for motors
 + Allow changing frequency for PWM signals for motors
 + Control LEDs with PWM?
++ Should there be status/echo packet types for UDP?
++ How does JSMN JSON handle escaping characters? Some strings like SSID/PSK might be invalid...
++ How do we nicely pass understandable error, i.e. from parsing config to response? https://github.com/TartanLlama/expected 👀
++ Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
++ Isn't `COM8_AGC_EN` in the camera registers definitions off by 1? 
++ Camera parameters are better described in [CircuitPython bindings docs for the esp32_camera library](https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html).
++ Create fast and C++ `constexpr` string to IP 4 function
++ NVS dump. See https://github.com/AFontaine79/Espressif-NVS-Analyzer
 + Expose nice [console](https://docs.espressif.com/projects/esp-idf/en/v4.4.3/esp32/api-reference/system/console.html) over serial monitor
 	+ Basic WiFi config
 	+ Allow uploading JSON to change config?
++ You can use NAT?! 
+	+ https://github.com/jonask1337/esp-idf-nat-example/blob/master/main/main.c 
+	+ https://github.com/espressif/esp-lwip/blob/6132c9755a43d4e04de4457f1558ced415756e4d/src/core/ipv4/ip4_napt.c#L228
 
 
