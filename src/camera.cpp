@@ -8,11 +8,14 @@
 #include <to_string.hpp>
 #include "common.hpp"
 
-#define CAMERA_NVS_NAMESPACE "network"
+namespace app::camera
+{
+
+#define NVS_CAMERA_NAMESPACE "camera"
 
 #include "camera_pins.hpp"
 
-void init_camera(void)
+void init(void)
 {
 	camera_config_t camera_config = {
 		.pin_pwdn  = CAM_PIN_PWDN,
@@ -47,7 +50,7 @@ void init_camera(void)
 	};
 	ESP_ERROR_CHECK(esp_camera_init(&camera_config));
 	
-	if (esp_camera_load_from_nvs(CAMERA_NVS_NAMESPACE) != ESP_OK) {
+	if (esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE) != ESP_OK) {
 		/* Fallback to some default settings */
 	}
 }
@@ -122,7 +125,7 @@ framesize_t parse_framesize(const char* str)
 /// @param[out] output_return Used to return number of bytes that would be written 
 /// 	to the output, or negative for error. Basically `printf`-like return.
 /// @return 
-esp_err_t config_camera(
+esp_err_t config(
 	char* input, jsmntok_t* root,
 	char* output, size_t output_length, int* output_return
 ) {
@@ -332,7 +335,11 @@ esp_err_t config_camera(
 		);
 	}
 
-	esp_camera_save_to_nvs(CAMERA_NVS_NAMESPACE);
+	esp_camera_save_to_nvs(NVS_CAMERA_NAMESPACE);
 
 	return ESP_OK;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 }

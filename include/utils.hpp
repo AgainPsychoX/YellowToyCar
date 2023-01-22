@@ -1,3 +1,4 @@
+#pragma once
 #include <sdkconfig.h>
 #include <string_view>
 #include <freertos/FreeRTOS.h>

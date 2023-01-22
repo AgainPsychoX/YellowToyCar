@@ -13,6 +13,16 @@
 #include <jsmn.h>
 #include "common.hpp"
 
+namespace app::network { // from network.cpp
+	esp_err_t config(char* input, jsmntok_t* root, char* output, size_t output_length, int* output_return); 
+}
+namespace app::camera { // from camera.cpp
+	esp_err_t config(char* input, jsmntok_t* root, char* output, size_t output_length, int* output_return);
+}
+
+namespace app::http
+{
+
 ////////////////////////////////////////////////////////////////////////////////
 // Utils
 
@@ -146,13 +156,6 @@ inline bool has_simple_value(const jsmntok_t* token)
 	return true;
 }
 
-esp_err_t config_network(
-	char* input, jsmntok_t* root,
-	char* output, size_t output_length, int* output_return); // from network.cpp
-esp_err_t config_camera(
-	char* input, jsmntok_t* root,
-	char* output, size_t output_length, int* output_return); // from camera.cpp
-
 /// @brief Applies (and/or reads current) JSON configuration for the whole app.
 /// @param[in] input Buffer with JSON data that was parsed into JSON into tokens.
 ///		Note: Passed non-const to allow in-place strings manipulation.
@@ -185,12 +188,12 @@ esp_err_t config_root(
 				ESP_LOGV(TAG_CONFIG_ROOT, "type=object size=%zu", value_token->size);
 				switch (key_hash) {
 					case fnv1a32("network"): {
-						if (config_network(input, value_token, nullptr, 0, nullptr) != ESP_OK)
+						if (network::config(input, value_token, nullptr, 0, nullptr) != ESP_OK)
 							return ESP_FAIL;
 						break;
 					}
 					case fnv1a32("camera"): {
-						if (config_camera(input, value_token, nullptr, 0, nullptr) != ESP_OK)
+						if (camera::config(input, value_token, nullptr, 0, nullptr) != ESP_OK)
 							return ESP_FAIL;
 						break;
 					}
@@ -258,7 +261,7 @@ esp_err_t config_root(
 		position += ret;
 		remaining = saturatedSubtract(remaining, ret);
 
-		config_network(nullptr, nullptr, position, remaining, &ret);
+		network::config(nullptr, nullptr, position, remaining, &ret);
 		if (unlikely(ret < 0)) goto output_fail;
 		position += ret;
 		remaining = saturatedSubtract(remaining, ret);
@@ -268,7 +271,7 @@ esp_err_t config_root(
 		position += ret;
 		remaining = saturatedSubtract(remaining, ret);
 
-		config_camera(nullptr, nullptr, position, remaining, &ret);
+		camera::config(nullptr, nullptr, position, remaining, &ret);
 		if (unlikely(ret < 0)) goto output_fail;
 		position += ret;
 		remaining = saturatedSubtract(remaining, ret);
@@ -563,4 +566,14 @@ void init_httpd_stream(void)
 		.handler  = stream_handler,
 		.user_ctx = nullptr,
 	});
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+void init(void)
+{
+	init_httpd_main();
+	init_httpd_stream();
+}
+
 }

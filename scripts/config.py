@@ -1,4 +1,3 @@
-import sys
 import json
 import argparse
 import requests
@@ -58,6 +57,7 @@ default_config = {
 
 def main():
 	parser = argparse.ArgumentParser()
+	parser.add_argument('--status', help='Request status before sending/requesting config.', required=False, action='store_true')
 	parser.add_argument('--config-file', metavar='PATH', help='JSON file to be send as config. If not specified, uses some defaults.', required=False)
 	parser.add_argument('--ip', '--address', help='IP of the device. Defaults to the one used for AP mode from new config.', required=False)
 	parser.add_argument('--read-only', help='If set, only reads the request (GET request instead POST)', required=False, action='store_true')
@@ -74,6 +74,21 @@ def main():
 		# use the AP one, from new config
 		args.ip = new_config['network']['ap']['ip']
 		print(f'Using IP: {args.ip}')
+
+	if args.status:
+		print('--- Status ---')
+		response = requests.get(f'http://{args.ip}/status?detailed=1', timeout=5)
+		response_type = response.headers.get('Content-Type', '')
+		print(f'Status code: {response.status_code}')
+		print(f'Content type: {response_type}')
+		print(f'Response length: {len(response.content)}')
+		print('Response:')
+		if ('application/json' in response_type):
+			print(json.dumps(response.json(), indent=4))
+		else:
+			print(response.text)
+
+		print('--- Config ---')
 
 	if args.read_only:
 		response = requests.get(f'http://{args.ip}/config', timeout=5)

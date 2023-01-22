@@ -8,6 +8,9 @@
 #include <jsmn.h>
 #include "utils.hpp"
 
+namespace app::network
+{
+
 ////////////////////////////////////////////////////////////////////////////////
 // Utils
 
@@ -21,7 +24,7 @@
 #define DEFAULT_PASSWORD    "AAaa11!!"
 #endif
 
-#define NETWORK_MISC_NVS_NAMESPACE "network"
+#define NVS_NETWORK_NAMESPACE "network"
 
 #define ip4_addr_printf_unpack(ip) ip4_addr_get_byte(ip, 0), ip4_addr_get_byte(ip, 1), ip4_addr_get_byte(ip, 2), ip4_addr_get_byte(ip, 3)
 
@@ -60,10 +63,10 @@ esp_err_t get_ip_info(wifi_interface_t interface, esp_netif_ip_info_t& ip_info, 
 ////////////////////////////////////////////////////////////////////////////////
 // Initialization
 
-void init_network()
+void init()
 {
 	esp_err_t nvs_result;
-	std::shared_ptr<nvs::NVSHandle> nvs_handle = nvs::open_nvs_handle(NETWORK_MISC_NVS_NAMESPACE, NVS_READWRITE, &nvs_result);
+	std::shared_ptr<nvs::NVSHandle> nvs_handle = nvs::open_nvs_handle(NVS_NETWORK_NAMESPACE, NVS_READWRITE, &nvs_result);
 	ESP_ERROR_CHECK(nvs_result);
 
 	ESP_ERROR_CHECK(esp_netif_init());
@@ -181,7 +184,7 @@ inline bool has_simple_value(const jsmntok_t* token)
 	return true;
 }
 
-esp_err_t config_network__common_keys(
+esp_err_t config__common_keys(
 	char* input, uint32_t key_hash, jsmntok_t* value_token,
 	wifi_common_config_t& wifi_config, esp_netif_ip_info_t& ip_info
 ) {
@@ -244,7 +247,7 @@ esp_err_t config_network__common_keys(
 	return ESP_OK;
 }
 
-inline esp_err_t config_network__ap(
+inline esp_err_t config__ap(
 	char* input, jsmntok_t* root,
 	wifi_ap_config_t& wifi_config, esp_netif_ip_info_t& ip_info
 ) {
@@ -263,7 +266,7 @@ inline esp_err_t config_network__ap(
 			return ESP_FAIL;
 		const auto value_length = value_token->end - value_token->start;
 		const auto key_hash = fnv1a32(input + key_token->start, input + key_token->end);
-		if (config_network__common_keys(input, key_hash, value_token, reinterpret_cast<wifi_common_config_t&>(wifi_config), ip_info) != ESP_OK)
+		if (config__common_keys(input, key_hash, value_token, reinterpret_cast<wifi_common_config_t&>(wifi_config), ip_info) != ESP_OK)
 			return ESP_FAIL;
 		switch (key_hash) {
 			case fnv1a32("ssid"): {
@@ -299,7 +302,7 @@ inline esp_err_t config_network__ap(
 	return ESP_OK;
 }
 
-inline esp_err_t config_network__sta(
+inline esp_err_t config__sta(
 	char* input, jsmntok_t* root,
 	wifi_sta_config_t& wifi_config, esp_netif_ip_info_t& ip_info, bool& static_ip
 ) {
@@ -318,7 +321,7 @@ inline esp_err_t config_network__sta(
 			return ESP_FAIL;
 		// const auto value_length = value_token->end - value_token->start;
 		const auto key_hash = fnv1a32(input + key_token->start, input + key_token->end);
-		if (config_network__common_keys(input, key_hash, value_token, reinterpret_cast<wifi_common_config_t&>(wifi_config), ip_info) != ESP_OK)
+		if (config__common_keys(input, key_hash, value_token, reinterpret_cast<wifi_common_config_t&>(wifi_config), ip_info) != ESP_OK)
 			return ESP_FAIL;
 		switch (key_hash) {
 			case fnv1a32("static"): {
@@ -345,12 +348,12 @@ inline esp_err_t config_network__sta(
 /// @param[out] output_return Used to return number of bytes that would be written 
 /// 	to the output, or negative for error. Basically `printf`-like return.
 /// @return 
-esp_err_t config_network(
+esp_err_t config(
 	char* input, jsmntok_t* root,
 	char* output, size_t output_length, int* output_return
 ) {
 	esp_err_t nvs_result;
-	std::shared_ptr<nvs::NVSHandle> nvs_handle = nvs::open_nvs_handle(NETWORK_MISC_NVS_NAMESPACE, NVS_READWRITE, &nvs_result);
+	std::shared_ptr<nvs::NVSHandle> nvs_handle = nvs::open_nvs_handle(NVS_NETWORK_NAMESPACE, NVS_READWRITE, &nvs_result);
 	if (unlikely(nvs_result != ESP_OK)) return nvs_result;
 
 	wifi_ap_config_t ap_config;
@@ -389,12 +392,12 @@ esp_err_t config_network(
 				ESP_LOGV(TAG_CONFIG_NETWORK, "type=object size=%zu", value_token->size);
 				switch (key_hash) {
 					case fnv1a32("ap"): {
-						if (config_network__ap(input, value_token, ap_config, ap_ip_info) != ESP_OK)
+						if (config__ap(input, value_token, ap_config, ap_ip_info) != ESP_OK)
 							return ESP_FAIL;
 						break;
 					}
 					case fnv1a32("sta"): {
-						if (config_network__sta(input, value_token, sta_config, sta_ip_info, sta_static) != ESP_OK)
+						if (config__sta(input, value_token, sta_config, sta_ip_info, sta_static) != ESP_OK)
 							return ESP_FAIL;
 						break;
 					}
@@ -538,4 +541,8 @@ esp_err_t config_network(
 	}
 
 	return ESP_OK;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 }
