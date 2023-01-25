@@ -1,4 +1,5 @@
 #include <sdkconfig.h>
+#include <cstdio>
 #include <cstring>
 #include <cctype>
 #include <esp_err.h>
@@ -64,12 +65,11 @@ inline bool has_simple_value(const jsmntok_t* token) {
 
 static const char* TAG_CONFIG_CAMERA = "config-camera";
 
-pixformat_t parse_pixformat(const char* str)
+pixformat_t parse_pixformat(std::string_view sv)
 {
-	if (strcasecmp(str, "PIXFORMAT_")) {
-		str += sizeof("PIXFORMAT_");
-	}
-	switch (fnv1a32i(str)) {
+	const auto pos = sv.find('_'); // try skip PIXFORMAT_
+	if (pos != std::string_view::npos) sv.remove_prefix(pos + 1);
+	switch (fnv1a32i(sv)) {
 		case fnv1a32i(to_string<static_cast<uint32_t>(PIXFORMAT_RGB565)>.data()):      case fnv1a32i("RGB565"):    return PIXFORMAT_RGB565;    // 2BPP/RGB565
 		case fnv1a32i(to_string<static_cast<uint32_t>(PIXFORMAT_YUV422)>.data()):      case fnv1a32i("YUV422"):    return PIXFORMAT_YUV422;    // 2BPP/YUV422
 		case fnv1a32i(to_string<static_cast<uint32_t>(PIXFORMAT_YUV420)>.data()):      case fnv1a32i("YUV420"):    return PIXFORMAT_YUV420;    // 1.5BPP/YUV420
@@ -83,12 +83,11 @@ pixformat_t parse_pixformat(const char* str)
 	}
 }
 
-framesize_t parse_framesize(const char* str)
+framesize_t parse_framesize(std::string_view sv)
 {
-	if (strcasecmp(str, "FRAMESIZE_")) {
-		str += sizeof("FRAMESIZE_");
-	}
-	switch (fnv1a32i(str)) {
+	const auto pos = sv.find('_'); // try skip FRAMESIZE_
+	if (pos != std::string_view::npos) sv.remove_prefix(pos + 1);
+	switch (fnv1a32i(sv)) {
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_96X96)>.data()):   case fnv1a32i("96x96"):                             return FRAMESIZE_96X96;
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_QQVGA)>.data()):   case fnv1a32i("160x120"):   case fnv1a32i("QQVGA"): return FRAMESIZE_QQVGA;
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_QCIF)>.data()):    case fnv1a32i("176x144"):   case fnv1a32i("QCIF"):  return FRAMESIZE_QCIF;
@@ -150,17 +149,18 @@ esp_err_t config(
 
 			if (unlikely(!has_simple_value(value_token)))
 				return ESP_FAIL;
+			const size_t value_length = value_token->end - value_token->start;
 			switch (fnv1a32(input + key_token->start, input + key_token->end)) {
 				case fnv1a32("framesize"):
 					input[value_token->end] = 0;
-					sensor->set_framesize(sensor, parse_framesize(input + value_token->start));
+					sensor->set_framesize(sensor, parse_framesize({input + value_token->start, value_length}));
 					break;
 				case fnv1a32("pixformat"):
 					input[value_token->end] = 0;
-					sensor->set_pixformat(sensor, parse_pixformat(input + value_token->start));
+					sensor->set_pixformat(sensor, parse_pixformat({input + value_token->start, value_length}));
 					break;
 				case fnv1a32("quality"): /* for JPEG compression */
-					sensor->set_quality(sensor, atoi(input + value_token->start));
+					sensor->set_quality(sensor, std::atoi(input + value_token->start));
 					break;
 
 				case fnv1a32("bpc"):
@@ -178,25 +178,25 @@ esp_err_t config(
 					break;
 
 				case fnv1a32("contrast"):
-					sensor->set_contrast(sensor, atoi(input + value_token->start));
+					sensor->set_contrast(sensor, std::atoi(input + value_token->start));
 					break;
 				case fnv1a32("brightness"):
-					sensor->set_brightness(sensor, atoi(input + value_token->start));
+					sensor->set_brightness(sensor, std::atoi(input + value_token->start));
 					break;
 
 				case fnv1a32("sharpness"): 
 					// TODO: not supported by original library
-					sensor->set_sharpness(sensor, atoi(input + value_token->start));
+					sensor->set_sharpness(sensor, std::atoi(input + value_token->start));
 					break;
 				case fnv1a32("denoise"):
 					// TODO: not supported by original library
-					sensor->set_denoise(sensor, atoi(input + value_token->start));
+					sensor->set_denoise(sensor, std::atoi(input + value_token->start));
 					break;
 
 				case fnv1a32("gain_ceiling"): {
 					// Clamp value here, because - unlike other params - the library doesn't do that,
 					// expecting users to use values from enum to prevent invalid state...
-					int value = atoi(input + value_token->start);
+					int value = std::atoi(input + value_token->start);
 					if (value < 0) value = 0; else if (value > 6) value = 6;
 					sensor->set_gainceiling(sensor, static_cast<gainceiling_t>(value));
 					break;
@@ -205,7 +205,7 @@ esp_err_t config(
 					sensor->set_gain_ctrl(sensor, parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("agc_gain"):
-					sensor->set_agc_gain(sensor, atoi(input + value_token->start));
+					sensor->set_agc_gain(sensor, std::atoi(input + value_token->start));
 					break;
 
 				case fnv1a32("aec"):
@@ -216,7 +216,7 @@ esp_err_t config(
 					sensor->set_aec2(sensor, parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("ae_level"): 
-					sensor->set_ae_level(sensor, atoi(input + value_token->start));
+					sensor->set_ae_level(sensor, std::atoi(input + value_token->start));
 					break;
 				case fnv1a32("exposure"): {
 					input[value_token->end] = 0;
@@ -226,39 +226,39 @@ esp_err_t config(
 						while (*++p)
 							if (std::isdigit(*p) || *p == '-')
 								break;
-						sensor->set_ae_level(sensor, atoi(p));
+						sensor->set_ae_level(sensor, std::atoi(p));
 						break;
 					}
 					sensor->set_exposure_ctrl(sensor, false);
 					[[fallthrough]];
 				}
 				case fnv1a32("aec_value"):
-					sensor->set_aec_value(sensor, atoi(input + value_token->start));
+					sensor->set_aec_value(sensor, std::atoi(input + value_token->start));
 					break;
 
 				case fnv1a32("awb"):
 					sensor->set_whitebal(sensor, parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("awb_gain"):
-					sensor->set_awb_gain(sensor, atoi(input + value_token->start));
+					sensor->set_awb_gain(sensor, std::atoi(input + value_token->start));
 					break;
 				case fnv1a32("wb_mode"):
-					sensor->set_wb_mode(sensor, atoi(input + value_token->start));
+					sensor->set_wb_mode(sensor, std::atoi(input + value_token->start));
 					break;
 				case fnv1a32("dcw"): // advanced auto white balance 
-					sensor->set_dcw(sensor, atoi(input + value_token->start));
+					sensor->set_dcw(sensor, std::atoi(input + value_token->start));
 					break;
 
 				case fnv1a32("raw_gma"):
-					sensor->set_raw_gma(sensor, atoi(input + value_token->start));
+					sensor->set_raw_gma(sensor, std::atoi(input + value_token->start));
 					break;
 				case fnv1a32("lenc"):
-					sensor->set_lenc(sensor, atoi(input + value_token->start));
+					sensor->set_lenc(sensor, std::atoi(input + value_token->start));
 					break;
 
 				case fnv1a32("special"):
 				case fnv1a32("special_effect"):
-					sensor->set_special_effect(sensor, atoi(input + value_token->start));
+					sensor->set_special_effect(sensor, std::atoi(input + value_token->start));
 					break;
 
 				default:
@@ -278,7 +278,7 @@ esp_err_t config(
 	}
 
 	if (output_return) {
-		*output_return = snprintf(
+		*output_return = std::snprintf(
 			output, output_length,
 			"{"
 				"\"framesize\":%d,"

@@ -250,7 +250,7 @@ esp_err_t config_root(
 		char* position = output;
 		size_t remaining = output_length;
 
-		ret = snprintf(
+		ret = std::snprintf(
 			position, remaining,
 			"{"
 				"\"uptime\":%llu,"
@@ -266,7 +266,7 @@ esp_err_t config_root(
 		position += ret;
 		remaining = saturatedSubtract(remaining, ret);
 
-		ret = snprintf(position, remaining, ",\"camera\":");
+		ret = std::snprintf(position, remaining, ",\"camera\":");
 		if (unlikely(ret < 0)) goto output_fail;
 		position += ret;
 		remaining = saturatedSubtract(remaining, ret);
@@ -338,7 +338,7 @@ esp_err_t status_handler(httpd_req_t* req)
 		char* position = buffer;
 		size_t remaining = bufferLength;
 
-		ret = snprintf(
+		ret = std::snprintf(
 			position, remaining,
 			"{"
 				"\"uptime\":%llu,"
@@ -356,7 +356,7 @@ esp_err_t status_handler(httpd_req_t* req)
 		for (int i = 0; i < sta_list.num; i++) {
 			const wifi_sta_info_t& sta_info = sta_list.sta[i];
 			// TODO: look up for IP assigned by DHCP server
-			ret = snprintf(
+			ret = std::snprintf(
 				position, remaining,
 				"{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"rssi\":%d}%c",
 				mac_addr_printf(sta_info.mac),
@@ -368,13 +368,13 @@ esp_err_t status_handler(httpd_req_t* req)
 			remaining -= ret;
 		}
 
-		ret = snprintf(position, remaining, "]}");
+		ret = std::snprintf(position, remaining, "]}");
 		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto fail;
 
 		writtenLength = (position + ret) - buffer;
 	}
 	else /* simple mode */ {
-		ret = snprintf(
+		ret = std::snprintf(
 			buffer, bufferLength,
 			"{"
 				"\"uptime\":%llu,"
@@ -582,7 +582,7 @@ esp_err_t stream_handler(httpd_req_t* req)
 		}
 
 		char partHeaderBuffer[64];
-		ret = snprintf(partHeaderBuffer, sizeof(partHeaderBuffer), _STREAM_PART, contentType, fb->len);
+		ret = std::snprintf(partHeaderBuffer, sizeof(partHeaderBuffer), _STREAM_PART, contentType, fb->len);
 		err = httpd_resp_send_chunk(req, partHeaderBuffer, ret);
 		if (err != ESP_OK) break;
 		err = httpd_resp_send_chunk(req, reinterpret_cast<char*>(fb->buf), fb->len);

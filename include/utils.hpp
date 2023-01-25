@@ -13,17 +13,18 @@
 /// Used to indicate where error checking is deliberately omitted.
 #define ESP_IGNORE_ERROR(x) (x)
 
-// Util for delay in miliseconds
+/// Util for delay in miliseconds (`vTaskDelay` inside).
 inline void delay(const TickType_t millis)
 {
 	vTaskDelay(millis / portTICK_PERIOD_MS);
 }
 
-/// constexpr version of `tolower`
+/// Compile-time version of `tolower`, without support for locales.
 constexpr char tolower(const char c) {
     return (c < 'A' || 'Z' < c) ? c : c + ('a' - 'A');
 }
 
+/// Returns result of saturated subtraction. Example: `3 - 7 == 0`.
 constexpr uint32_t saturatedSubtract(uint32_t x, uint32_t y)
 {
 	uint32_t res = x - y;
@@ -32,7 +33,7 @@ constexpr uint32_t saturatedSubtract(uint32_t x, uint32_t y)
 }
 static_assert(saturatedSubtract(3, 7) == 0);
 
-// FNV1a 32 hashing
+/// Calculates FNV1a32 hash for given C-string.
 constexpr uint32_t fnv1a32(const char* s) {
 	uint32_t hash = 2166136261u;
 	while (*s) {
@@ -41,6 +42,7 @@ constexpr uint32_t fnv1a32(const char* s) {
 	}
 	return hash;
 }
+/// Calculates FNV1a32 hash for given buffer. 
 constexpr uint32_t fnv1a32(const char* s, size_t count) {
 	uint32_t hash = 2166136261u;
 	while (count--) {
@@ -49,6 +51,7 @@ constexpr uint32_t fnv1a32(const char* s, size_t count) {
 	}
 	return hash;
 }
+/// Calculates FNV1a32 hash for iterable.
 template<typename TIterator>
 constexpr uint32_t fnv1a32(TIterator s, TIterator e)
 {
@@ -59,7 +62,14 @@ constexpr uint32_t fnv1a32(TIterator s, TIterator e)
 	}
 	return hash;
 }
+/// Calculates FNV1a32 hash for iterable.
+template<typename TIterable>
+constexpr inline uint32_t fnv1a32(const TIterable& c)
+{
+	return fnv1a32(std::cbegin(c), std::cend(c));
+}
 
+/// Calculates case-insensitive FNV1a32 hash for given C-string.
 constexpr uint32_t fnv1a32i(const char* s) {
 	uint32_t hash = 2166136261u;
 	while (*s) {
@@ -68,6 +78,7 @@ constexpr uint32_t fnv1a32i(const char* s) {
 	}
 	return hash;
 }
+/// Calculates case-insensitive FNV1a32 hash for given buffer. 
 constexpr uint32_t fnv1a32i(const char* s, size_t count) {
 	uint32_t hash = 2166136261u;
 	while (count--) {
@@ -76,8 +87,9 @@ constexpr uint32_t fnv1a32i(const char* s, size_t count) {
 	}
 	return hash;
 }
+/// Calculates case-insensitive FNV1a32 hash for range, given start and end iterator.
 template<typename TIterator>
-constexpr uint32_t fnv1a32i(const TIterator s, const TIterator e)
+constexpr uint32_t fnv1a32i(TIterator s, TIterator e)
 {
 	uint32_t hash = 2166136261u;
 	while (s != e) {
@@ -85,6 +97,12 @@ constexpr uint32_t fnv1a32i(const TIterator s, const TIterator e)
 		hash *= 16777619u;
 	}
 	return hash;
+}
+/// Calculates case-insensitive FNV1a32 hash for iterable.
+template<typename TIterable>
+constexpr inline uint32_t fnv1a32i(const TIterable& c)
+{
+	return fnv1a32i(std::cbegin(c), std::cend(c));
 }
 
 /// Parses boolean-like string.

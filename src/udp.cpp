@@ -1,4 +1,5 @@
 #include <sdkconfig.h>
+#include <cstring>
 #include <esp_log.h>
 #include <lwip/sockets.h>
 #include <lwip/def.h>
@@ -133,7 +134,7 @@ void listen()
 	int ret;
 	struct sockaddr_in client_addr;
 	UnknownPacket packet;
-	memset(&packet, 0, sizeof(packet));
+	std::memset(&packet, 0, sizeof(packet));
 	socklen_t len;
 	ret = recvfrom(sock, packet.buffer, maxPacketLength, 0, reinterpret_cast<sockaddr*>(&client_addr), &len);
 	if (ret < 0) {

@@ -338,8 +338,6 @@ Software consist of:
 + Tests:
 	+ WiFi STA mode
 	+ UDP connection when switching WiFi AP to STA
-+ Consider using default C++ [`std::hash`](https://en.cppreference.com/w/cpp/utility/hash) (murmur most-likely, but might be more optimized than our `fnv1a32`)
-+ Use `std::` over C stuff where possible, please?
 + Detailed status output, including debug stuff
 	+ Process list and stats.
 	+ Memory heap usage & fragmentation.

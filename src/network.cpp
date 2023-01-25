@@ -142,8 +142,8 @@ void init()
 				.beacon_interval = 500,
 			},
 		};
-		strncpy(reinterpret_cast<char*>(wifi_config.ap.ssid),     DEFAULT_SSID,     sizeof(wifi_config_t::ap.ssid));
-		strncpy(reinterpret_cast<char*>(wifi_config.ap.password), DEFAULT_PASSWORD, sizeof(wifi_config_t::ap.password));
+		std::strncpy(reinterpret_cast<char*>(wifi_config.ap.ssid),     DEFAULT_SSID,     sizeof(wifi_config_t::ap.ssid));
+		std::strncpy(reinterpret_cast<char*>(wifi_config.ap.password), DEFAULT_PASSWORD, sizeof(wifi_config_t::ap.password));
 		ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 		ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
 		goto starting;
@@ -188,7 +188,7 @@ esp_err_t config__common_keys(
 	char* input, uint32_t key_hash, jsmntok_t* value_token,
 	wifi_common_config_t& wifi_config, esp_netif_ip_info_t& ip_info
 ) {
-	const auto value_length = value_token->end - value_token->start;
+	const size_t value_length = value_token->end - value_token->start;
 	switch (key_hash) {
 		case fnv1a32("ip"): {
 			input[value_token->end] = 0;
@@ -206,14 +206,14 @@ esp_err_t config__common_keys(
 		case fnv1a32("mask"):
 		case fnv1a32("netmask"): {
 			input[value_token->end] = 0;
-			if (strchr(input + value_token->start, '.') == nullptr) {
+			if (std::strchr(input + value_token->start, '.') == nullptr) {
 				// IP address
 				if (esp_netif_str_to_ip4(input + value_token->start, &ip_info.netmask) != ESP_OK)
 					return ESP_FAIL;
 			}
 			else {
 				// Mask length
-				const uint8_t maskLength = atoi(input + value_token->start);
+				const uint8_t maskLength = std::atoi(input + value_token->start);
 				uint8_t i = maskLength - 1;
 				ip_info.netmask.addr = 1;
 				while (i--) {
@@ -227,7 +227,7 @@ esp_err_t config__common_keys(
 		}
 		case fnv1a32("ssid"): {
 			if (value_length > sizeof(wifi_config.ssid)) return ESP_FAIL;
-			strncpy(wifi_config.ssid, input + value_token->start, value_length);
+			std::strncpy(wifi_config.ssid, input + value_token->start, value_length);
 			wifi_config.ssid[value_length] = '\0';
 			break;
 		}
@@ -235,11 +235,11 @@ esp_err_t config__common_keys(
 		case fnv1a32("password"): {
 			if (value_token->type == JSMN_STRING && value_length != 0) {
 				if (value_length > sizeof(wifi_config.password) - 1) return ESP_FAIL;
-				strncpy(wifi_config.password, input + value_token->start, value_length);
+				std::strncpy(wifi_config.password, input + value_token->start, value_length);
 				wifi_config.password[value_length] = '\0';
 			}
 			else {
-				memset(wifi_config.password, 0, sizeof(wifi_config.password));
+				std::memset(wifi_config.password, 0, sizeof(wifi_config.password));
 			}
 			break;
 		}
@@ -264,13 +264,13 @@ inline esp_err_t config__ap(
 		);
 		if (unlikely(!has_simple_value(value_token)))
 			return ESP_FAIL;
-		const auto value_length = value_token->end - value_token->start;
+		const size_t value_length = value_token->end - value_token->start;
 		const auto key_hash = fnv1a32(input + key_token->start, input + key_token->end);
 		if (config__common_keys(input, key_hash, value_token, reinterpret_cast<wifi_common_config_t&>(wifi_config), ip_info) != ESP_OK)
 			return ESP_FAIL;
 		switch (key_hash) {
 			case fnv1a32("ssid"): {
-				wifi_config.ssid_len = strlen(input + value_token->start);
+				wifi_config.ssid_len = std::strlen(input + value_token->start);
 				break;
 			}
 			case fnv1a32("psk"):
@@ -284,7 +284,7 @@ inline esp_err_t config__ap(
 				break;
 			}
 			case fnv1a32("channel"): {
-				wifi_config.channel = atoi(input + value_token->start);
+				wifi_config.channel = std::atoi(input + value_token->start);
 				break;
 			}
 			case fnv1a32("hidden"): {
@@ -319,7 +319,7 @@ inline esp_err_t config__sta(
 		);
 		if (unlikely(!has_simple_value(value_token)))
 			return ESP_FAIL;
-		// const auto value_length = value_token->end - value_token->start;
+		// const size_t value_length = value_token->end - value_token->start;
 		const auto key_hash = fnv1a32(input + key_token->start, input + key_token->end);
 		if (config__common_keys(input, key_hash, value_token, reinterpret_cast<wifi_common_config_t&>(wifi_config), ip_info) != ESP_OK)
 			return ESP_FAIL;
@@ -437,7 +437,7 @@ esp_err_t config(
 						break;
 					}
 					case fnv1a32("fallback"): {
-						fallback = atoi(input + value_token->start);
+						fallback = std::atoi(input + value_token->start);
 						if (fallback != 0 && fallback < 1000) {
 							ESP_LOGD(TAG_CONFIG_NETWORK, "Fallback timeout clamped to minimal value of 1 second.");
 							fallback = 1000;
@@ -497,7 +497,7 @@ esp_err_t config(
 	}
 
 	if (output_return) {
-		*output_return = snprintf(
+		*output_return = std::snprintf(
 			output, output_length,
 			"{"
 				"\"mode\":\"%s\","
