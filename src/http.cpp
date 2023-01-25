@@ -471,7 +471,7 @@ esp_err_t capture_handler(httpd_req_t* req)
 		return ESP_FAIL;
 	}
 	uint64_t end = esp_timer_get_time();
-	printf("Frame took %llu microseconds. Length: %u\n", end - start, fb->len);
+	ESP_LOGI(TAG_HTTPD_MAIN, "Frame captured. Time: %llu us. Length: %u\n", end - start, fb->len);
 
 	switch (fb->format) {
 		case PIXFORMAT_JPEG: {
@@ -541,10 +541,58 @@ void init_httpd_main(void)
 
 static const char* TAG_HTTPD_STREAM = "httpd-stream";
 
+// TODO: Use C++ ways... https://stackoverflow.com/questions/28708497/constexpr-to-concatenate-two-or-more-char-strings
+#define PART_BOUNDARY "123456789000000000000987654321"
+#define _STREAM_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" PART_BOUNDARY
+#define _STREAM_BOUNDARY "\r\n--" PART_BOUNDARY "\r\n"
+#define _STREAM_PART "Content-Type: %s\r\nContent-Length: %u\r\n\r\n"
+
 esp_err_t stream_handler(httpd_req_t* req)
 {
-	// TODO: stream_handler
-	return ESP_FAIL;
+	int ret;
+	esp_err_t err;
+
+	httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
+	httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+	ESP_LOGI(TAG_HTTPD_STREAM, "Starting stream");
+	for (;;) {	
+		auto [fb] = esp_camera_fb_guard();
+		if (unlikely(!fb)) {
+			ESP_LOGE(TAG_HTTPD_STREAM, "Failed to get frame buffer of camera");
+			httpd_resp_send_500(req);
+			return ESP_FAIL;
+		}
+
+		const char* contentType = nullptr;
+		switch (fb->format) {
+			case PIXFORMAT_JPEG: {
+				contentType = "image/jpeg";
+				break;
+			}
+			// TODO: support other?
+			default: {
+				ESP_LOGE(TAG_HTTPD_STREAM, "Camera frame with invalid format: %d ", fb->format);
+				break;
+			}
+		}
+		if (contentType == nullptr) {
+			httpd_resp_send_500(req);
+			return ESP_FAIL;
+		}
+
+		char partHeaderBuffer[64];
+		ret = snprintf(partHeaderBuffer, sizeof(partHeaderBuffer), _STREAM_PART, contentType, fb->len);
+		err = httpd_resp_send_chunk(req, partHeaderBuffer, ret);
+		if (err != ESP_OK) break;
+		err = httpd_resp_send_chunk(req, reinterpret_cast<char*>(fb->buf), fb->len);
+		if (err != ESP_OK) break;
+		err = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, sizeof(_STREAM_BOUNDARY));
+		if (err != ESP_OK) break;
+	}
+
+	ESP_LOGI(TAG_HTTPD_STREAM, "Stream ended");
+	return ESP_OK;
 }
 
 void init_httpd_stream(void)
