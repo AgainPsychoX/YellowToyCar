@@ -10,15 +10,15 @@ void setMotor(Motor which, float duty) {
 	const auto timer = static_cast<mcpwm_timer_t>(which);
 	if (duty > 0) {
 		// Forward
-		mcpwm_set_signal_low(MCPWM_UNIT_0, timer, MCPWM_OPR_B);
-		mcpwm_set_duty(MCPWM_UNIT_0, timer, MCPWM_OPR_A, duty);
-		mcpwm_set_duty_type(MCPWM_UNIT_0, timer, MCPWM_OPR_A, MCPWM_DUTY_MODE_0);
+		mcpwm_set_signal_low(MCPWM_UNIT_0, timer, MCPWM_GEN_B);
+		mcpwm_set_duty(MCPWM_UNIT_0, timer, MCPWM_GEN_A, duty);
+		mcpwm_set_duty_type(MCPWM_UNIT_0, timer, MCPWM_GEN_A, MCPWM_DUTY_MODE_0);
 	}
 	else {
 		// Backwards
-		mcpwm_set_signal_low(MCPWM_UNIT_0, timer, MCPWM_OPR_A);
-		mcpwm_set_duty(MCPWM_UNIT_0, timer, MCPWM_OPR_B, -duty);
-		mcpwm_set_duty_type(MCPWM_UNIT_0, timer, MCPWM_OPR_B, MCPWM_DUTY_MODE_0);
+		mcpwm_set_signal_low(MCPWM_UNIT_0, timer, MCPWM_GEN_A);
+		mcpwm_set_duty(MCPWM_UNIT_0, timer, MCPWM_GEN_B, -duty);
+		mcpwm_set_duty_type(MCPWM_UNIT_0, timer, MCPWM_GEN_B, MCPWM_DUTY_MODE_0);
 	}
 	ESP_LOGD(TAG, "Motor %s set to %.2f%%", which == Motor::Left ? "LEFT" : "RIGHT", duty);
 }

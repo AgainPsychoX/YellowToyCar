@@ -71,11 +71,12 @@ extern "C" void app_main(void)
 	for (;;) {
 		udp::listen();
 		if (errno) udp::init();
+		delay(1);
 
 		if (esp_timer_get_time() - lastControlTime > controlTimeout) {
 			hal::setMotor(hal::Motor::Left, 0);
 			hal::setMotor(hal::Motor::Right, 0);
+			delay(50);
 		}
-		delay(1);
 	}
 }

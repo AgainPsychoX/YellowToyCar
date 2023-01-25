@@ -22,7 +22,7 @@ Hardware consist of:
 	* MicroSD card slot (unused, as GPIOs are used for motors and flash LED).
 	* 2 LEDs: red internal pulled high, and bright white external, acting for camera flash.
 * Motors driver: [L298N-based module](https://abc-rc.pl/product-pol-6196-Modul-sterownika-L298N-do-silnikow-DC-i-krokowych-Arduino.html?query_id=1), able to drive 2 DC motors.
-* 4 motors, controlled in pairs, attached by gears to wheels.
+* 4 brushed motors, controlled in pairs, attached by gears to wheels.
 * External antena for ESP32 Wi-Fi connectivity is used.
 * Battery (3 cells of 4 V, total 12 V for main board, 8 V for motors used).
 * Additional circuitry:

@@ -50,6 +50,7 @@ void handlePacket(const UnknownPacket& packet)
 			hal::setMotor(hal::Motor::Left,  v.targetLeftDuty);
 			hal::setMotor(hal::Motor::Right, v.targetRightDuty);
 			// TODO: implement smooth phasing
+			lastControlTime = esp_timer_get_time();
 			return;
 		}
 	}
