@@ -1,43 +1,58 @@
-import os
 import argparse
 import requests
 import time
 import keyboard
 import socket
 import struct
+from math import floor;
 
 def clamp(value, low, high): 
 	return max(low, min(value, high))
 
 def main():
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--ip', '--address', help='IP of the device.', required=False, default='192.168.4.1')
-	parser.add_argument('--port', help='Port of UDP control server.', required=False, default=83, type=int)
+	parser.add_argument('--ip', '--address', help='IP of the device. Default: 192.168.4.1', required=False, default='192.168.4.1')
+	parser.add_argument('--port', help='Port of UDP control server. Default: 83', required=False, default=83, type=int)
+	parser.add_argument('--interval', help='Interval between control packets in milliseconds. Default: 100', required=False, default=100, type=int)
 	parser.add_argument('--dry-run', help='Performs dry-run for testing.', required=False, action='store_true')
+	parser.add_argument('--show-packets', help='Show sent packets (like in dry run).', required=False, action='store_true')
 	parser.add_argument('--short-packet-type', help='Uses short packet type instead long.', required=False, action='store_true')
+	parser.add_argument('--no-blink', help='Prevents default behaviour of constant status led blinking.', required=False, action='store_true')
+	driving = parser.add_argument_group('Driving model')
+	driving.add_argument('--max-speed', metavar='VALUE', help='Initial maximal speed. From 0.0 for still to 1.0 for full.', required=False, default=1.0, type=float)
+	driving.add_argument('--min-speed', metavar='VALUE', help='Minimal speed to drive motor. Used to avoid motor noises and damage.', required=False, default=0.1, type=float)
+	driving.add_argument('--acceleration', metavar='VALUE', help='Initial acceleration per second.', required=False, default=1, type=float)
 	args = parser.parse_args()
+
+	if args.dry_run:
+		args.show_packets = True
 
 	# Testing connection
 	if not args.dry_run:
-		response = requests.get(f'http://{args.ip}/status?detailed=1', timeout=5)
+		response = requests.get(f'http://{args.ip}/status', timeout=5)
 		if not response.ok:
 			print(f'Querying device status failed with status code: {response.status_code}')
 			exit(1)
 		print('Device found')
 
+		start_time = time.time()
+		start_uptime = int(response.json()['uptime']) # us
+		start_uptime_ms = round(start_uptime / 1000)
+
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
 		# sock.connect((args.ip, args.port))
 		print('Socket open')
 
-	interval = 0.100 # seconds
-	base_gain = 0.1
-	max_speed = 1.0
+	max_speed = args.max_speed or 1.0
+	min_speed = args.min_speed or 0.1 # below means cutting off down to 0, avoid weird noises
+	base_gain = args.acceleration or 1 # per second
 	vectorized_mode = True
 
 	left_motor = 0.0 # 0 to 1
 	right_motor = 0.0
 	main_light = False
 	other_light = False
+	blink_other_light = not args.no_blink
 
 	def sendControlUDP():
 		"""Sends the UDP packet to control the car"""
@@ -58,6 +73,12 @@ def main():
 			else:
 				bytes = struct.pack('BBHff', 2, flags, 0, left_motor * 100, right_motor * 100)
 			sock.sendto(bytes, (args.ip, args.port))
+			if args.show_packets:
+				expected_uptime_ms = start_uptime_ms + floor((time.time() - start_time) * 1000)
+				if args.short_packet_type:
+					print(f'  ({expected_uptime_ms}) udp: ShortControlPacket: F:{flags:02X} T:0ms L:{round(abs(left_motor) * 255) * 100:.2f} R:{round(abs(right_motor) * 255):.3f}')
+				else:
+					print(f'  ({expected_uptime_ms}) udp: LongControlPacket: F:{flags:02X} T:0ms L:{left_motor * 100:.2f} R{right_motor * 100:.2f}')
 
 	def sendControlHTTP():
 		"""Sends the HTTP packet to control the car"""
@@ -91,7 +112,12 @@ def main():
 		print('\tShift to temporary uncap speed; ESC to exit.')
 
 	help()
+	time.sleep(0.500)
+
+	last_update_time = time.time()
 	while True:
+		delta_time = time.time() - last_update_time
+
 		if keyboard.is_pressed('escape'):
 			break
 
@@ -102,7 +128,7 @@ def main():
 			other_light = False
 			sendControlUDP()
 			sendControlHTTP()
-			time.sleep(interval / 2)
+			time.sleep(0.200)
 			continue
 
 		if keyboard.is_pressed('v'):
@@ -118,20 +144,21 @@ def main():
 			gain *= 2
 		elif keyboard.is_modifier('ctrl'):
 			gain /= 4
+		gain *= delta_time
 		
 		if keyboard.is_pressed('-'):
-			base_gain -= 0.010 if keyboard.is_pressed('shift') else 0.001
+			base_gain -= 0.10 if keyboard.is_pressed('shift') else 0.01
 			print(f'Gain: {base_gain:.3f}')
 		elif keyboard.is_pressed('+') or keyboard.is_pressed('='):
-			base_gain += 0.010 if keyboard.is_pressed('shift') else 0.001
+			base_gain += 0.10 if keyboard.is_pressed('shift') else 0.01
 			print(f'Gain: {base_gain:.3f}')
 
 		if keyboard.is_pressed('['):
-			max_speed -= 0.010 if keyboard.is_pressed('shift') else 0.001
+			max_speed -= 0.10 if keyboard.is_pressed('shift') else 0.01
 			max_speed = clamp(max_speed, -1, 1)
 			print(f'Max speed: {max_speed:.3f}')
 		elif keyboard.is_pressed(']'):
-			max_speed += 0.010 if keyboard.is_pressed('shift') else 0.001
+			max_speed += 0.10 if keyboard.is_pressed('shift') else 0.01
 			max_speed = clamp(max_speed, -1, 1)
 			print(f'Max speed: {max_speed:.3f}')
 
@@ -190,12 +217,20 @@ def main():
 				left_motor = gain
 				right_motor = -gain
 
-		time.sleep(interval)
-
 		left_motor = clamp(left_motor, -max_speed, max_speed)
 		right_motor = clamp(right_motor, -max_speed, max_speed)
+		if abs(left_motor) < min_speed:
+			left_motor = 0
+		if abs(right_motor) < min_speed:
+			right_motor = 0
+
+		if blink_other_light:
+			other_light = not other_light
+
 		sendControlUDP()
 
+		last_update_time = time.time()
+		time.sleep(args.interval / 1000) # milliseconds
 
 if __name__ == '__main__':
 	main()
