@@ -42,8 +42,8 @@ namespace app::udp {
 	void listen();
 }
 namespace app {
-	uint64_t lastControlTime = 0;
-	uint64_t controlTimeout = 2'000'000;
+	uptime_t lastControlTime = 0;
+	uptime_t controlTimeout = 2'000'000; // us
 }
 
 using namespace app;
@@ -52,6 +52,7 @@ static const char* TAG = "main";
 
 extern "C" void app_main(void)
 {
+	delay(1000);
 	ESP_LOGI(TAG, "Hello!");
 
 	////////////////////////////////////////

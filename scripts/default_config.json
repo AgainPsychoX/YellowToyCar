@@ -1,0 +1,50 @@
+{
+	"network": {
+		"mode": "ap",
+		"fallback": 10000,
+		"sta": {
+			"ssid": "",
+			"psk": "",
+			"ip": "0.0.0.0",
+			"mask": 20,
+			"gateway": "0.0.0.0",
+			"static": 0
+		},
+		"ap": {
+			"ssid": "YellowToyCar",
+			"psk": "AAaa11!!",
+			"ip": "192.168.4.1",
+			"mask": 24,
+			"gateway": "192.168.4.1",
+			"channel": 1,
+			"hidden": 0
+		}
+	},
+	"camera": {
+		"framesize": 13,
+		"pixformat": 4,
+		"quality": 12,
+		"bpc": 0,
+		"wpc": 1,
+		"hmirror": 0,
+		"vflip": 0,
+		"contrast": 0,
+		"brightness": 0,
+		"sharpness": 0,
+		"denoise": 0,
+		"gain_ceiling": 0,
+		"agc": 1,
+		"agc_gain": 0,
+		"aec": 1,
+		"aec2": 0,
+		"ae_level": 0,
+		"aec_value": 168,
+		"awb": 1,
+		"awb_gain": 1,
+		"wb_mode": 0,
+		"dcw": 1,
+		"raw_gma": 1,
+		"lenc": 1,
+		"special": 0
+	}
+}

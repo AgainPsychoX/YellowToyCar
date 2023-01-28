@@ -4,20 +4,71 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+////////////////////////////////////////////////////////////////////////////////
+// Error handling
+
+extern void _esp_error_check_failed_without_abort(esp_err_t rc, const char *file, int line, const char *function, const char *expression);
+
+#ifdef NDEBUG
+#	define ESP_ERROR_CHECK_RETURN(x)  ({ esp_err_t err_rc_ = (x); err_rc_; })
+#	define ESP_ERROR_CHECK_OR_GOTO(x) ({ esp_err_t err_rc_ = (x); err_rc_; })
+#elif defined(CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT)
 /// Checks error and returns from current function with the same error.
-#define ESP_ERROR_CHECK_RETURN(x) do {                                         \
-		esp_err_t err_rc_ = (x);                                               \
-		if (unlikely(err_rc_ != ESP_OK)) return err_rc_;                       \
-	} while(0)
+#	define ESP_ERROR_CHECK_RETURN(x) ({                                        \
+			esp_err_t err_rc_ = (x);                                           \
+			if (unlikely(err_rc_ != ESP_OK)) {                                 \
+				return err_rc_;                                                \
+			}                                                                  \
+			err_rc_;                                                           \
+		})
+/// Checks error and jump to label (goto) if error occurs.
+#	define ESP_ERROR_CHECK_OR_GOTO(label, x) ({                                \
+			esp_err_t err_rc_ = (x);                                           \
+			if (unlikely(err_rc_ != ESP_OK)) {                                 \
+				goto label;                                                    \
+			}                                                                  \
+			err_rc_;                                                           \
+		})
+#else
+/// Checks error and returns from current function with the same error.
+#	define ESP_ERROR_CHECK_RETURN(x) ({                                        \
+			esp_err_t err_rc_ = (x);                                           \
+			if (unlikely(err_rc_ != ESP_OK)) {                                 \
+				_esp_error_check_failed_without_abort(                         \
+					err_rc_, __FILE__, __LINE__, __ASSERT_FUNC, #x);           \
+				return err_rc_;                                                \
+			}                                                                  \
+			err_rc_;                                                           \
+		})
+/// Checks error and jump to label (goto) if error occurs.
+#	define ESP_ERROR_CHECK_OR_GOTO(label, x) ({                                \
+			esp_err_t err_rc_ = (x);                                           \
+			if (unlikely(err_rc_ != ESP_OK)) {                                 \
+				_esp_error_check_failed_without_abort(                         \
+					err_rc_, __FILE__, __LINE__, __ASSERT_FUNC, #x);           \
+				goto label;                                                    \
+			}                                                                  \
+			err_rc_;                                                           \
+		})
+#endif //NDEBUG
 
 /// Used to indicate where error checking is deliberately omitted.
 #define ESP_IGNORE_ERROR(x) (x)
+
+////////////////////////////////////////////////////////////////////////////////
+// Other
 
 /// Util for delay in miliseconds (`vTaskDelay` inside).
 inline void delay(const TickType_t millis)
 {
 	vTaskDelay(millis / portTICK_PERIOD_MS);
 }
+
+/// Type returned from `esp_timer_get_time` function, which returns time in microseconds since boot.
+using uptime_t = std::invoke_result_t<decltype(esp_timer_get_time)>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Parsing and processing
 
 /// Compile-time version of `tolower`, without support for locales.
 constexpr char tolower(const char c) {
@@ -118,4 +169,36 @@ constexpr uint8_t numberOfSetBits(uint32_t i)
 	i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
 	i = (i + (i >> 4)) & 0x0F0F0F0F;
 	return (i * 0x01010101) >> 24;
+}
+
+template <typename T>
+constexpr typename std::enable_if_t<sizeof(T) == 2, T>
+hton(T value) noexcept
+{
+	return  ((value & 0x00FF) << 8)
+	/***/ | ((value & 0xFF00) >> 8);
+}
+
+template <typename T>
+constexpr typename std::enable_if_t<sizeof(T) == 4, T>
+hton(T value) noexcept
+{
+	return  ((value & 0x000000FF) << 24)
+	/***/ | ((value & 0x0000FF00) <<  8)
+	/***/ | ((value & 0x00FF0000) >>  8)
+	/***/ | ((value & 0xFF000000) >> 24);
+}
+
+template <typename T>
+constexpr typename std::enable_if_t<sizeof(T) == 8, T>
+hton(T value) noexcept
+{
+	return  ((value & 0xFF00000000000000ull) >> 56)
+	/***/ | ((value & 0x00FF000000000000ull) >> 40)
+	/***/ | ((value & 0x0000FF0000000000ull) >> 24)
+	/***/ | ((value & 0x000000FF00000000ull) >>  8)
+	/***/ | ((value & 0x00000000FF000000ull) <<  8)
+	/***/ | ((value & 0x0000000000FF0000ull) << 24)
+	/***/ | ((value & 0x000000000000FF00ull) << 40)
+	/***/ | ((value & 0x00000000000000FFull) << 56);
 }

@@ -23,11 +23,11 @@ Hardware consist of:
 	* 2 LEDs: red internal pulled high, and bright white external, acting for camera flash.
 * Motors driver: [L298N-based module](https://abc-rc.pl/product-pol-6196-Modul-sterownika-L298N-do-silnikow-DC-i-krokowych-Arduino.html?query_id=1), able to drive 2 DC motors.
 * 4 brushed motors, controlled in pairs, attached by gears to wheels.
-* External antena for ESP32 Wi-Fi connectivity is used.
+* External antenna for ESP32 Wi-Fi connectivity is used.
 * Battery (3 cells of 4 V, total 12 V for main board, 8 V for motors used).
 * Additional circuitry:
 	* Voltage converter (down to 5V, red LED)
-	* Voltage stabilizator (down to 3.3V required for ESP32, green LED).
+	* Voltage stabilizer (down to 3.3V required for ESP32, green LED).
 	* Battery, motor drivers and programmer connectors.
 	* Switch for programming mode (ON to program, OFF to execute). 
 * Plastic grid and packaging.
@@ -42,7 +42,7 @@ Hardware consist of:
 
 Software consist of:
 
-+ Espressif IoT Development Framework (ESP-IDF) is used
++ Espressif IoT Development Framework (ESP-IDF) is used, which includes modified FreeRTOS.
 + Networking related code (<abbr title="access point">AP</abbr> or <abbr title="station">STA</abbr>)
 + Camera related code
 + JSON configuration interface functions
@@ -167,6 +167,7 @@ Software consist of:
 
 	* For AP mode, default IP/gateway should stay `192.168.4.1` for now, as DHCP settings are hardcoded to some default values.
 	* DNS, SNTP and NAT settings are also not implemented yet.
+	* When changing network settings, device might get disconnected, so no response will be sent.
 
 * `/drive` → Basic controls endpoint, might be lagging as it's over HTTP, which uses TCP, which might retransmit old requests).
 
@@ -181,11 +182,13 @@ Software consist of:
 
 * `/capture` → Frame capture from the car camera.
 
-* `:81/stream` → Continuous frames stream from the car camera. Using sepa
+* `:81/stream` → Continuous frames stream from the car camera using <abbr title="Motion JPEG">MJPEG</abbr> that exploits special content type: `multipart/x-mixed-replace` that informs the client to replace the image if necessary. **Separate HTTP server is used** (hence the non-standard port 81), as it easiest way to continously send parts (next frames) in this single one endless request.
 
 
 
 ### Fast controls API (UDP)
+
+Application waits for UDP packets on port 83.
 
 #### Short control packet
 
@@ -325,6 +328,7 @@ Software consist of:
 
 ### Known issues
 
+* The communication (to ESP32) seems to work best in AP mode with UDP packets.
 * C/C++ compiler used is quite old and includes decade old known GCC bug related to `struct`s aggregate initializers. See [discussion here](https://stackoverflow.com/questions/70172941/c99-designator-member-outside-of-aggregate-initializer). As solution I found out its easiest to use `strncpy` which gets inlined/optimized away.
 * [The PlatformIO docs about embedding files](https://docs.platformio.org/en/latest/platforms/espressif32.html#embedding-binary-data) suggest to use prefix `_binary_src_` while accessing the start/end labels of embedded data blocks (like in  `GENERATE_HTTPD_HANDLER_FOR_EMBEDDED_FILE` macro), its not true. The docs seems outdated or invalid in some areas, at least for `esp-idf`. However I found **solution**: Use both `board_build.embed_files` in `platformio.ini` and also `EMBED_FILES` in `CMakeLists.txt`. In code, use `_binary_`, without `src_` part.
 * Code style is a bit mess, `snake_case` mixed with `camelCase` because we use C libraries from ESP-IDF and some parts use them a lot. It's even uglier to ride a single camel in the middle of snakes.
@@ -333,11 +337,15 @@ Software consist of:
 
 
 
+### Interesting materials
+
+* [ESP-IDF 4.4.3 for ESP32 - Programming Guide](https://docs.espressif.com/projects/esp-idf/en/v4.4.3/esp32/index.html) - including API references, examples, guides and other resources.
+* [YouTube series about RTOS](https://www.youtube.com/watch?v=F321087yYy4&list=PLEBQazB0HUyQ4hAPU1cJED6t3DU0h34bz) by Digi-Key. Great introduction to ESP32-flavoured RTOS, with exercises for viewer.
+
+
+
 ### To-do
 
-+ Tests:
-	+ WiFi STA mode
-	+ UDP connection when switching WiFi AP to STA
 + Detailed status output, including debug stuff
 	+ Process list and stats.
 	+ Memory heap usage & fragmentation.
@@ -355,10 +363,7 @@ Software consist of:
 	+ Camera settings
 	+ Motors calibration
 + Networking
-	+ Fallback timeout: Enter AP if couldn't connect as STA.
-	+ Check periodicity for configured network while in soft AP (unless someone connected to soft AP).
-	+ Detect connection dropped https://github.com/espressif/esp-idf/blob/master/examples/wifi/getting_started/softAP/main/softap_example_main.c#L33
-	+ Optionally allow entering soft AP if lost and cannot find configured network, by duration setting.
+	+ When network config is changed, make sure to send some kind of response before disconnecting.
 	+ Allow set IP and DHCP settings for AP mode.
 	+ Allow change DNS settings.
 	+ Captive portal when in AP mode.
@@ -373,6 +378,7 @@ Software consist of:
 + Should there be status/echo packet types for UDP?
 + How does JSMN JSON handle escaping characters? Some strings like SSID/PSK might be invalid...
 + How do we nicely pass understandable error, i.e. from parsing config to response? https://github.com/TartanLlama/expected 👀
++ Does STA mode groups packets before delivering?
 + Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
 + Isn't `COM8_AGC_EN` in the camera registers definitions off by 1? 
 + Camera parameters are better described in [CircuitPython bindings docs for the esp32_camera library](https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html).
