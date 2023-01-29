@@ -38,8 +38,6 @@ esp_err_t config(char* input, jsmntok_t* root, char* output, size_t output_lengt
 
 #define NVS_NETWORK_NAMESPACE "network"
 
-#define ip4_addr_printf_unpack(ip) ip4_addr_get_byte(ip, 0), ip4_addr_get_byte(ip, 1), ip4_addr_get_byte(ip, 2), ip4_addr_get_byte(ip, 3)
-
 esp_netif_t* ap_netif  = nullptr;
 esp_netif_t* sta_netif = nullptr;
 
@@ -381,8 +379,8 @@ esp_err_t config__common_keys(
 				if (maskLength > 30) 
 					return ESP_FAIL;
 				ip_info.netmask.addr = hton(~0u << (32 - maskLength));
-				ESP_LOGV(TAG_CONFIG_NETWORK, "Setting mask as length %u. Resulting address: %u.%u.%u.%u", 
-					maskLength, ip4_addr_printf_unpack(&ip_info.netmask));
+				ESP_LOGV(TAG_CONFIG_NETWORK, "Setting mask as length %u. Resulting address: " IPSTR, 
+					maskLength, IP2STR(&ip_info.netmask));
 			}
 			else {
 				if (esp_netif_str_to_ip4(input + value_token->start, &ip_info.netmask) != ESP_OK)
@@ -687,17 +685,17 @@ esp_err_t config(
 				"\"sta\":{"
 					"\"ssid\":\"%.32s\","
 					"\"psk\":\"%.64s\","
-					"\"ip\":\"%u.%u.%u.%u\","
+					"\"ip\":\"" IPSTR "\","
 					"\"mask\":%u,"
-					"\"gateway\":\"%u.%u.%u.%u\","
+					"\"gateway\":\"" IPSTR "\","
 					"\"static\":%c"
 				"},"
 				"\"ap\":{"
 					"\"ssid\":\"%.32s\","
 					"\"psk\":\"%.64s\","
-					"\"ip\":\"%u.%u.%u.%u\","
+					"\"ip\":\"" IPSTR "\","
 					"\"mask\":%u,"
-					"\"gateway\":\"%u.%u.%u.%u\","
+					"\"gateway\":\"" IPSTR "\","
 					"\"channel\":%u,"
 					"\"hidden\":%c"
 				"}"
@@ -707,16 +705,16 @@ esp_err_t config(
 			/* network.sta */
 			sta_config.ssid,
 			sta_config.password,
-			ip4_addr_printf_unpack(&sta_ip_info.ip),
+			IP2STR(&sta_ip_info.ip),
 			numberOfSetBits(sta_ip_info.netmask.addr),
-			ip4_addr_printf_unpack(&sta_ip_info.gw),
+			IP2STR(&sta_ip_info.gw),
 			'0' + sta_static,
 			/* network.ap */
 			ap_config.ssid,
 			ap_config.password,
-			ip4_addr_printf_unpack(&ap_ip_info.ip),
+			IP2STR(&ap_ip_info.ip),
 			numberOfSetBits(ap_ip_info.netmask.addr),
-			ip4_addr_printf_unpack(&ap_ip_info.gw),
+			IP2STR(&ap_ip_info.gw),
 			ap_config.channel,
 			'0' + ap_config.ssid_hidden
 		);

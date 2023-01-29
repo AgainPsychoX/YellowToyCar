@@ -305,6 +305,72 @@ Application waits for UDP packets on port 83.
 
 
 
+### Scripts
+
+Some scripts were developed to ease development and usage.
+
+#### Config
+
+```console
+$ python .\scripts\config.py --help
+usage: config.py [-h] [--status] [--status-only] [--config-file PATH] [--wifi-mode {ap,sta,apsta,nat,null}] [--ip IP] [--read-only] [--restart [RESTART]]
+
+This script allows to send & retrieve config from the car.
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --status              Request status before sending/requesting config.
+  --status-only         Only request status.
+  --config-file PATH    JSON file to be send as config.
+  --wifi-mode {ap,sta,apsta,nat,null}
+                        Overwrite WiFi mode from config.
+  --ip IP, --address IP
+                        IP of the device. Defaults to the one used for AP mode from new config or 192.168.4.1.
+  --read-only           If set, only reads the request (GET request instead POST).
+  --restart [TIMEOUT]   Requests for restart after updating config/retrieving the config.
+```
+
+#### Control
+
+```console
+$ python .\scripts\control.py --help       
+usage: control.py [-h] [--ip IP] [--port PORT] [--interval INTERVAL] [--dry-run] [--show-packets] [--short-packet-type] [--no-blink] [--max-speed VALUE] [--min-speed VALUE] [--acceleration VALUE]
+
+This script allows to control the car by continuously reading keyboard inputs and sending packets.
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --ip IP, --address IP
+                        IP of the device. Default: 192.168.4.1
+  --port PORT           Port of UDP control server. Default: 83
+  --interval INTERVAL   Interval between control packets in milliseconds. Default: 100
+  --dry-run             Performs dry-run for testing.
+  --show-packets        Show sent packets (like in dry run).
+  --short-packet-type   Uses short packet type instead long.
+  --no-blink            Prevents default behaviour of constant status led blinking.
+
+Driving model:
+  --max-speed VALUE     Initial maximal speed. From 0.0 for still to 1.0 for full.
+  --min-speed VALUE     Minimal speed to drive motor. Used to avoid motor noises and damage.
+  --acceleration VALUE  Initial acceleration per second.
+
+Note: The 'keyboard' library were used (requires sudo under Linux), and it hooks work also out of focus, which is benefit and issue at the same time, so please care.
+```
+
+##### Controls for the control script
+
+```
+Controls:
+	WASD (or arrows) keys to move; QE to rotate;
+	F to toggle main light; R to toggle the other light;   
+	Space to stop (immediately, uses both UDP and HTTP);   
+	V to toggle between vectorized (smoothed) and raw mode;
+	+/- to modify acceleration; [/] to modify max speed;
+	Shift to temporary uncap speed; ESC to exit.
+```
+
+
+
 ### Tasks
 
 | Friendly name | Name     | Affinity | Priority | Source file | Description   |

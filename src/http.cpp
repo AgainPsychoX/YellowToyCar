@@ -7,6 +7,7 @@
 #include <nvs_handle.hpp>
 #include <esp_netif.h>
 #include <esp_wifi.h>
+#include <freertos/timers.h>
 #include <esp_http_server.h>
 #include <esp_camera.h>
 #include <esp_timer.h>
@@ -58,9 +59,6 @@ struct esp_camera_fb_guard
 		if (fb) esp_camera_fb_return(fb);
 	}
 };
-
-#define ip4_addr_printf_unpack(ip) ip4_addr_get_byte(ip, 0), ip4_addr_get_byte(ip, 1), ip4_addr_get_byte(ip, 2), ip4_addr_get_byte(ip, 3)
-#define mac_addr_printf(mac) mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
 
 std::string_view skipToQuerystring(std::string_view uri) {
 	auto pos = uri.rfind('?');
@@ -224,9 +222,19 @@ esp_err_t config_root(
 					return ESP_FAIL;
 
 				switch (key_hash) {
-					case fnv1a32("reset"): {
-						if (parseBooleanFast(input + value_token->start)) {
-							// TODO: reset safely
+					case fnv1a32("restart"): {
+						uint32_t delay = std::atoi(input + value_token->start);
+						if (delay || parseBooleanFast(input + value_token->start)) {
+							if (delay < 100) delay = 100;
+							const auto fallbackReconnectTimer = xTimerCreate(
+								"restart", delay / portTICK_PERIOD_MS, pdFALSE, static_cast<void*>(0), 
+								[] (TimerHandle_t) {
+									ESP_LOGI(TAG_CONFIG_ROOT, "Restarting...");
+									esp_restart();
+								}
+							);
+							xTimerStart(fallbackReconnectTimer, portMAX_DELAY);
+							ESP_LOGD(TAG_CONFIG_ROOT, "Timer set to restart in %ums", delay);
 						}
 						break;
 					}
@@ -307,8 +315,8 @@ esp_err_t status_handler(httpd_req_t* req)
 	std::time_t time = std::time({});
 	std::strftime(std::data(timeString), std::size(timeString), "%FT%T%z", std::gmtime(&time));
 
-	wifi_mode_t mode;
-	esp_wifi_get_mode(&mode);
+	wifi_mode_t wifi_mode;
+	esp_wifi_get_mode(&wifi_mode);
 	wifi_ap_record_t ap;
 	if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
 		ap.rssi = 0;
@@ -331,7 +339,10 @@ esp_err_t status_handler(httpd_req_t* req)
 	if (detailedMode) {
 		wifi_sta_list_t sta_list;
 		if (esp_err_t err = esp_wifi_ap_get_sta_list(&sta_list); err != ESP_OK) {
-			ESP_ERROR_CHECK_WITHOUT_ABORT(err);
+			// Not an error if there is no AP
+			if (wifi_mode == WIFI_MODE_AP || wifi_mode == WIFI_MODE_APSTA)
+				ESP_ERROR_CHECK_WITHOUT_ABORT(err);
+			
 			sta_list.num = 0;
 		}
 
@@ -343,10 +354,14 @@ esp_err_t status_handler(httpd_req_t* req)
 			"{"
 				"\"uptime\":%llu,"
 				"\"time\":\"%s\","
+				"\"freeHeap\":%u,"
+				"\"minFreeHeap\":%u,"
 				"\"rssi\":%d,"
 				"\"stations\":[",
 			esp_timer_get_time(),
 			timeString,
+			esp_get_free_heap_size(),
+			esp_get_minimum_free_heap_size(),
 			ap.rssi
 		);
 		if (unlikely(ret < 0 || static_cast<size_t>(ret) >= remaining)) goto fail;
@@ -358,8 +373,8 @@ esp_err_t status_handler(httpd_req_t* req)
 			// TODO: look up for IP assigned by DHCP server
 			ret = std::snprintf(
 				position, remaining,
-				"{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"rssi\":%d}%c",
-				mac_addr_printf(sta_info.mac),
+				"{\"mac\":\"" MACSTR "\",\"rssi\":%d}%c",
+				MAC2STR(sta_info.mac),
 				sta_info.rssi,
 				(i + 1 < sta_list.num) ? ',' : ' '
 			);
