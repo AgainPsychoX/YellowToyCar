@@ -23,7 +23,7 @@ def main():
 	parser.add_argument('--no-blink', help='Prevents default behaviour of constant status led blinking.', required=False, action='store_true')
 	driving = parser.add_argument_group('Driving model')
 	driving.add_argument('--max-speed', metavar='VALUE', help='Initial maximal speed. From 0.0 for still to 1.0 for full.', required=False, default=1.0, type=float)
-	driving.add_argument('--min-speed', metavar='VALUE', help='Minimal speed to drive motor. Used to avoid motor noises and damage.', required=False, default=0.1, type=float)
+	driving.add_argument('--min-speed', metavar='VALUE', help='Minimal speed to drive motor. Used to avoid motor noises and damage.', required=False, default=0.2, type=float)
 	driving.add_argument('--acceleration', metavar='VALUE', help='Initial acceleration per second.', required=False, default=1, type=float)
 	args = parser.parse_args()
 
@@ -188,12 +188,12 @@ def main():
 				if keyboard.is_pressed('w') or keyboard.is_pressed('up'):
 					left_motor += gain
 					right_motor += gain
-				if keyboard.is_pressed('a') or keyboard.is_pressed('left'):
-					left_motor -= gain / 2
-					right_motor += gain / 2
 				if keyboard.is_pressed('s') or keyboard.is_pressed('down'):
 					left_motor -= gain
 					right_motor -= gain
+				if keyboard.is_pressed('a') or keyboard.is_pressed('left'):
+					left_motor -= gain / 2
+					right_motor += gain / 2
 				if keyboard.is_pressed('d') or keyboard.is_pressed('right'):
 					left_motor += gain / 2
 					right_motor -= gain / 2
@@ -202,8 +202,8 @@ def main():
 					left_motor -= gain
 					right_motor += gain
 				if keyboard.is_pressed('e'):
-					left_motor -= gain
-					right_motor += gain
+					left_motor += gain
+					right_motor -= gain
 			else:
 				left_motor = 0
 				right_motor = 0
@@ -211,20 +211,20 @@ def main():
 				if keyboard.is_pressed('w') or keyboard.is_pressed('up'):
 					left_motor = gain
 					right_motor = gain
-				elif keyboard.is_pressed('a') or keyboard.is_pressed('left'):
-					# left_motor = gain
-					right_motor = gain
-				elif keyboard.is_pressed('s') or keyboard.is_pressed('down'):
+				if keyboard.is_pressed('s') or keyboard.is_pressed('down'):
 					left_motor = -gain
 					right_motor = -gain
-				elif keyboard.is_pressed('d') or keyboard.is_pressed('right'):
+				if keyboard.is_pressed('a') or keyboard.is_pressed('left'):
+					# left_	motor = gain
+					right_motor = gain
+				if keyboard.is_pressed('d') or keyboard.is_pressed('right'):
 					left_motor = gain
 					# right_motor = gain
 
-				elif keyboard.is_pressed('q'):
+				if keyboard.is_pressed('q'):
 					left_motor = -gain
 					right_motor = gain
-				elif keyboard.is_pressed('e'):
+				if keyboard.is_pressed('e'):
 					left_motor = gain
 					right_motor = -gain
 
