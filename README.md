@@ -3,8 +3,16 @@
 
 This repository contains code, documentation and other stuff related to yellow toy car project I made.
 
-<!-- TODO: One nice picture here -->
+I also made Flutter mobile app for controlling the toy car, see [YellowToyCarApp](https://github.com/AgainPsychoX/YellowToyCarApp) repository.
 
+<table>
+	<tbody>
+		<tr>
+			<td colspan=2><img src="https://i.imgur.com/3KbkHvP.jpg" width="720" /></td>
+			<td><img src="https://i.imgur.com/duyLOIX.jpg" width="400" /></td>
+		</tr>
+	</tbody>
+</table>
 
 
 
