@@ -36,7 +36,7 @@ class CarControlData:
 		if self.left_motor < 0:
 			flags |= 0b01000000
 		if self.right_motor < 0:
-			flags |= 0b01000000
+			flags |= 0b10000000
 		return flags
 
 	def to_short_packet(self):
