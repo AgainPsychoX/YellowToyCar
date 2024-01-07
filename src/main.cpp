@@ -77,6 +77,8 @@ extern "C" void app_main(void)
 		if (esp_timer_get_time() - lastControlTime > controlTimeout) {
 			hal::setMotor(hal::Motor::Left, 0);
 			hal::setMotor(hal::Motor::Right, 0);
+			hal::setMainLight(false);
+			hal::setOtherLight(false);
 			delay(50);
 		}
 	}
