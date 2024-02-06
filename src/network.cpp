@@ -13,7 +13,7 @@
 #	define FORCE_DUMP_NETWORK_CONFIG 0
 #endif
 
-namespace app {
+namespace app::control { // from control.cpp
 	extern uptime_t lastControlTime;
 	extern uptime_t controlTimeout;
 }
@@ -98,11 +98,12 @@ bool possiblyReconnectAsStationOrDelay()
 
 	// TODO: instead of restarting, use contorl lost event?
 	const auto now = esp_timer_get_time();
-	if (now - lastControlTime < controlTimeout) {
+	if (now - control::lastControlTime < control::controlTimeout) {
 		if (unlikely(xTimerReset(fallbackReconnectTimer, 0) == pdFAIL)) {
 			ESP_LOGW(TAG_FALLBACK, "Failed to reset timer for delayed reconnect");
+			// TODO: rethink error handling for very unlikely stuff 
 		}
-		xTimerChangePeriod(fallbackReconnectTimer, controlTimeout / portTICK_PERIOD_MS, 0);
+		xTimerChangePeriod(fallbackReconnectTimer, control::controlTimeout / 1000 / portTICK_PERIOD_MS, 0);
 		return false;
 	}
 
@@ -316,7 +317,7 @@ void init()
 	ESP_ERROR_CHECK(registerDisconnectEventHandlers());
 
 	fallbackReconnectTimer = xTimerCreate(
-		"ap-fallback", reconnectDelayWhenNoStations / portTICK_PERIOD_MS, pdFALSE, static_cast<void*>(0), 
+		"ap-fallback", reconnectDelayWhenNoStations / 1000 / portTICK_PERIOD_MS, pdFALSE, static_cast<void*>(0), 
 		[] (TimerHandle_t) { possiblyReconnectAsStationOrDelay(); }
 	);
 

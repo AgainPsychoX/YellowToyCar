@@ -1,6 +1,5 @@
 #pragma once
 #include <sdkconfig.h>
-#include <esp_log.h>
 #include <driver/gpio.h>
 #include <driver/mcpwm.h>
 #include "common.hpp"
@@ -16,19 +15,12 @@
 namespace app::hal 
 {
 
-extern const char* TAG;
+void setMainLight(bool on);
 
-inline void setMainLight(bool on) {
-	gpio_set_level(GPIO_MAIN_LIGHT, on);
-	ESP_LOGD(TAG, "Main light %s", on ? "on" : "off");
-}
+void setOtherLight(bool on);
 
-inline void setOtherLight(bool on) {
-	// Pulled high, so drive low to make it light
-	gpio_set_level(GPIO_OTHER_LIGHT, !on);
-	ESP_LOGD(TAG, "Other light %s", !on ? "on" : "off");
-}
-
+/// Enum type used to specify motor among them all.
+/// Underlying values of the enum are also ID of associated MCPWM timer.
 enum class Motor {
 	Left  = MCPWM_TIMER_0,
 	Right = MCPWM_TIMER_1

@@ -4,11 +4,7 @@
 #include <lwip/sockets.h>
 #include <lwip/def.h>
 #include "udp.hpp"
-
-#include "hal.hpp"
-namespace app {
-	extern uint64_t lastControlTime;
-}
+#include "control.hpp"
 
 // Ugly way to force debug & verbose logs to appear, see README > Known issues.
 #undef ESP_LOGD
@@ -30,28 +26,29 @@ toFloatMotorDuty(T value, bool backwards)
 
 void handlePacket(const UnknownPacket& packet)
 {
+	using namespace control;
 	switch (packet.type) {
 		case PacketType::ShortControl: {
 			const auto& v = packet.asShortControl;
 			ESP_LOGD(TAG, "ShortControlPacket: F:%02X L:%u R:%u ", 
 				v.flags, v.leftDuty, v.rightDuty);
-			hal::setMainLight(v.mainLight);
-			hal::setOtherLight(v.otherLight);
-			hal::setMotor(hal::Motor::Left,  toFloatMotorDuty(v.leftDuty, v.leftBackward));
-			hal::setMotor(hal::Motor::Right, toFloatMotorDuty(v.rightDuty, v.rightBackward));
-			lastControlTime = esp_timer_get_time();
+			setMainLight(v.mainLight);
+			setOtherLight(v.otherLight);
+			setMotor(Motor::Left,  toFloatMotorDuty(v.leftDuty, v.leftBackward));
+			setMotor(Motor::Right, toFloatMotorDuty(v.rightDuty, v.rightBackward));
+			refresh();
 			return;
 		}
 		case PacketType::LongControl: {
 			const auto& v = packet.asLongControl;
 			ESP_LOGD(TAG, "LongControlPacket: F:%02X T:%ums L:%.2f R:%.2f ", 
 				v.flags, v.smoothingTime, v.targetLeftDuty, v.targetRightDuty);
-			hal::setMainLight(v.mainLight);
-			hal::setOtherLight(v.otherLight);
-			hal::setMotor(hal::Motor::Left,  v.targetLeftDuty);
-			hal::setMotor(hal::Motor::Right, v.targetRightDuty);
+			setMainLight(v.mainLight);
+			setOtherLight(v.otherLight);
+			setMotor(Motor::Left,  v.targetLeftDuty);
+			setMotor(Motor::Right, v.targetRightDuty);
+			refresh();
 			// TODO: implement smooth phasing
-			lastControlTime = esp_timer_get_time();
 			return;
 		}
 	}

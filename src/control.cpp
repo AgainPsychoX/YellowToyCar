@@ -2,15 +2,99 @@
 #include <cstdio>
 #include <esp_log.h>
 #include <jsmn.h>
-#include "common.hpp"
-
+#include "control.hpp"
 #include "hal.hpp"
-namespace app {
-	extern uint64_t lastControlTime; // TODO: move it to control.cpp from main?
-}
 
 namespace app::control
 {
+
+////////////////////////////////////////////////////////////////////////////////
+// Control with state management
+
+void init()
+{
+	setMotor(Motor::Left, 0);
+	setMotor(Motor::Right, 0);
+	setMainLight(false);
+	setOtherLight(false);
+}
+
+uptime_t lastControlTime = 0;
+uptime_t controlTimeout = 2'000'000; // us
+
+uptime_t mainLightControlTimeout = 30'000'000; // us
+
+void tick()
+{
+	uptime_t timeSinceControl = esp_timer_get_time() - lastControlTime;
+	if (timeSinceControl > controlTimeout) {
+		setMotor(Motor::Left, 0);
+		setMotor(Motor::Right, 0);
+		delay(1);
+		if (timeSinceControl > mainLightControlTimeout) {
+			setMainLight(false);
+			setOtherLight(false);
+		}
+	}
+}
+
+void refresh()
+{
+	lastControlTime = esp_timer_get_time();
+}
+
+// TODO: allow configure control timeout?
+// TODO: calibration values for motors?
+
+////////////////////////////////////////
+// Lights
+
+bool mainLightState;
+void setMainLight(bool on)
+{
+	hal::setMainLight(on);
+	mainLightState = on;
+}
+bool getMainLight()
+{
+	return mainLightState;
+}
+
+bool otherLightState;
+void setOtherLight(bool on)
+{
+	hal::setOtherLight(on);
+	otherLightState = on;
+}
+bool getOtherLight()
+{
+	return otherLightState;
+}
+
+////////////////////////////////////////
+// Motors
+
+float lastMotorDuty[static_cast<uint8_t>(Motor::_Count)];
+
+// No translation for motor enums (aside from casting) is required between
+// `control` and `hal` modules because it just so happens next MCPWM timers
+// are in right order.
+static_assert(static_cast<int>(control::Motor::Left)  == static_cast<int>(hal::Motor::Left));
+static_assert(static_cast<int>(control::Motor::Right) == static_cast<int>(hal::Motor::Right));
+
+void setMotor(Motor which, float duty)
+{
+	hal::setMotor(static_cast<hal::Motor>(which), duty);
+	lastMotorDuty[static_cast<uint8_t>(which)] = duty;
+}
+
+float getMotor(Motor which)
+{
+	return lastMotorDuty[static_cast<uint8_t>(which)];
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Configuration
 
 inline bool has_simple_value(const jsmntok_t* token)
 {
@@ -53,18 +137,17 @@ esp_err_t config(
 			const size_t value_length = value_token->end - value_token->start;
 			switch (fnv1a32(input + key_token->start, input + key_token->end)) {
 				case fnv1a32("mainLight"):
-					hal::setMainLight(parseBooleanFast(input + value_token->start));
+					control::setMainLight(parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("otherLight"):
-					hal::setOtherLight(parseBooleanFast(input + value_token->start));
+					control::setOtherLight(parseBooleanFast(input + value_token->start));
 					break;
-					// TODO: allow control motors?
-					// hal::setMotor(hal::Motor::Left,  toFloatMotorDuty(v.leftDuty, v.leftBackward));
-					// hal::setMotor(hal::Motor::Right, toFloatMotorDuty(v.rightDuty, v.rightBackward));
-					// lastControlTime = esp_timer_get_time();
-
-					// TODO: allow set control timeout?
-					// TODO: calibration values for motors?
+				case fnv1a32("left"):
+					control::setOtherLight(std::atoi(input + value_token->start));
+					break;
+				case fnv1a32("right"):
+					control::setOtherLight(std::atoi(input + value_token->start));
+					break;
 				default:
 					ESP_LOGD(TAG_CONFIG_CONTROL, "Unknown field '%.*s', ignoring.", 
 						key_token->end - key_token->start, input + key_token->start);
@@ -77,6 +160,9 @@ esp_err_t config(
 				goto done;
 		}
 		done: /* semicolon for empty statement */ ;
+
+		// Control object existing, even empty, marks the control state as fresh
+		control::refresh();
 	}
 
 	if (output_return) {
@@ -84,9 +170,14 @@ esp_err_t config(
 			output, output_length,
 			"{"
 				"\"mainLight\":%u,"
-				"\"otherLight\":%u"
+				"\"otherLight\":%u,"
+				"\"left\":%.1f,"
+				"\"right\":%.1f"
 			"}",
-			0, 0 // TODO: return current control state? would require storing it...?
+			getMainLight(),
+			getOtherLight(),
+			getMotor(Motor::Left),
+			getMotor(Motor::Right)
 		);
 	}
 

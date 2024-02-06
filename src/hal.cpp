@@ -1,12 +1,27 @@
 #include <sdkconfig.h>
 #include "hal.hpp"
+#include <esp_log.h>
 
 namespace app::hal 
 {
 
 const char* TAG = "hal";
 
-void setMotor(Motor which, float duty) {
+void setMainLight(bool on)
+{
+	gpio_set_level(GPIO_MAIN_LIGHT, on);
+	ESP_LOGD(TAG, "Main light %s", on ? "on" : "off");
+}
+
+void setOtherLight(bool on)
+{
+	// Pulled high, so drive low to make it light
+	gpio_set_level(GPIO_OTHER_LIGHT, !on);
+	ESP_LOGD(TAG, "Other light %s", on ? "on" : "off");
+}
+
+void setMotor(Motor which, float duty)
+{
 	const auto timer = static_cast<mcpwm_timer_t>(which);
 	if (duty > 0) {
 		// Forward

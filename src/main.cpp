@@ -5,6 +5,7 @@
 #include "common.hpp"
 
 #include "hal.hpp"
+#include "control.hpp"
 namespace app::nvs {
 	inline void init()
 	{
@@ -41,10 +42,6 @@ namespace app::udp {
 	void init();
 	void listen();
 }
-namespace app {
-	uptime_t lastControlTime = 0;
-	uptime_t controlTimeout = 2'000'000; // us
-}
 
 using namespace app;
 
@@ -52,7 +49,6 @@ static const char* TAG = "main";
 
 extern "C" void app_main(void)
 {
-	delay(1000);
 	ESP_LOGI(TAG, "Hello!");
 
 	////////////////////////////////////////
@@ -61,25 +57,17 @@ extern "C" void app_main(void)
 	nvs::init();
 	network::init();
 	camera::init();
+	control::init();
 	http::init();
 	time::init();
 
 	////////////////////////////////////////
 
-	delay(1000);
 	udp::init();
-
 	for (;;) {
 		udp::listen();
 		if (errno) udp::init();
 		delay(1);
-
-		if (esp_timer_get_time() - lastControlTime > controlTimeout) {
-			hal::setMotor(hal::Motor::Left, 0);
-			hal::setMotor(hal::Motor::Right, 0);
-			hal::setMainLight(false);
-			hal::setOtherLight(false);
-			delay(50);
-		}
+		control::tick();
 	}
 }
