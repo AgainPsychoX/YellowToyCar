@@ -304,7 +304,7 @@ esp_err_t config(
 				"\"wpc\":%d,"
 				"\"raw_gma\":%d,"
 				"\"lenc\":%d,"
-				"\"special\":%d"
+				"\"special_effect\":%d"
 			"}",
 			static_cast<uint8_t>(sensor->status.framesize),
 			static_cast<uint8_t>(sensor->pixformat),

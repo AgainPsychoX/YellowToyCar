@@ -341,22 +341,22 @@ document.addEventListener('DOMContentLoaded', () => {
 		camera: Object.fromEntries([[e.target.id, getElementValue(e)]])
 	})
 
-	addSelectOne('framesize', 'Framesize', Object.fromEntries([
-		'96x96',
-		'160x120',
-		'176x144',
-		'240x176',
-		'240x240',
-		'320x240',
-		'400x296',
-		'480x320',
-		'640x480',
-		'800x600',
-		'1024x768',
-		'1280x720',
-		'1280x1024',
-		'1600x1200',
-	].map(x => [x, i])), 5);
+	addSelectOne('framesize', 'Framesize', {
+		'96x96':     0,
+		'160x120':   1,
+		'176x144':   2,
+		'240x176':   3,
+		'240x240':   4,
+		'320x240':   5,
+		'400x296':   6,
+		'480x320':   7,
+		'640x480':   8,
+		'800x600':   9,
+		'1024x768':  10,
+		'1280x720':  11,
+		'1280x1024': 12,
+		'1600x1200': 13,
+	}, 5);
 
 	addRange('quality', 'Quality',  10, 63, 10);
 
