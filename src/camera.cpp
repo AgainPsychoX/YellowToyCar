@@ -163,13 +163,6 @@ esp_err_t config(
 					sensor->set_quality(sensor, std::atoi(input + value_token->start));
 					break;
 
-				case fnv1a32("bpc"):
-					sensor->set_bpc(sensor, parseBooleanFast(input + value_token->start));
-					break;
-				case fnv1a32("wpc"):
-					sensor->set_wpc(sensor, parseBooleanFast(input + value_token->start));
-					break;
-
 				case fnv1a32("hmirror"):
 					sensor->set_hmirror(sensor, parseBooleanFast(input + value_token->start));
 					break;
@@ -248,6 +241,12 @@ esp_err_t config(
 				case fnv1a32("dcw"): // advanced auto white balance 
 					sensor->set_dcw(sensor, std::atoi(input + value_token->start));
 					break;
+				case fnv1a32("bpc"):
+					sensor->set_bpc(sensor, parseBooleanFast(input + value_token->start));
+					break;
+				case fnv1a32("wpc"):
+					sensor->set_wpc(sensor, parseBooleanFast(input + value_token->start));
+					break;
 
 				case fnv1a32("raw_gma"):
 					sensor->set_raw_gma(sensor, std::atoi(input + value_token->start));
@@ -284,8 +283,6 @@ esp_err_t config(
 				"\"framesize\":%d,"
 				"\"pixformat\":%d,"
 				"\"quality\":%d,"
-				"\"bpc\":%d,"
-				"\"wpc\":%d,"
 				"\"hmirror\":%d,"
 				"\"vflip\":%d,"
 				"\"contrast\":%d,"
@@ -303,6 +300,8 @@ esp_err_t config(
 				"\"awb_gain\":%d,"
 				"\"wb_mode\":%d,"
 				"\"dcw\":%d,"
+				"\"bpc\":%d,"
+				"\"wpc\":%d,"
 				"\"raw_gma\":%d,"
 				"\"lenc\":%d,"
 				"\"special\":%d"
@@ -310,8 +309,6 @@ esp_err_t config(
 			static_cast<uint8_t>(sensor->status.framesize),
 			static_cast<uint8_t>(sensor->pixformat),
 			sensor->status.quality,
-			sensor->status.bpc,
-			sensor->status.wpc,
 			sensor->status.hmirror,
 			sensor->status.vflip,
 			sensor->status.contrast,
@@ -329,6 +326,8 @@ esp_err_t config(
 			sensor->status.awb_gain,
 			sensor->status.wb_mode,
 			sensor->status.dcw,
+			sensor->status.bpc,
+			sensor->status.wpc,
 			sensor->status.raw_gma,
 			sensor->status.lenc,
 			sensor->status.special_effect

@@ -177,17 +177,6 @@ Software consist of:
 	* DNS, SNTP and NAT settings are also not implemented yet.
 	* When changing network settings, device might get disconnected, so no response will be sent.
 
-* `/drive` → Basic controls endpoint, might be lagging as it's over HTTP, which uses TCP, which might retransmit old requests).
-
-	Querystring API:
-	```c
-	?mainLight=1    // Main light (external bright white LED)
-	&otherLight=1   // Other light (internal small red LED)
-	&left=255       // Left motor duty and direction (negative values for backward)
-	&right=255      // Right motor duty and direction (negative values for backward)
-	```
-	Returns nothing.
-
 * `/capture` → Frame capture from the car camera.
 
 * `:81/stream` → Continuous frames stream from the car camera using <abbr title="Motion JPEG">MJPEG</abbr> that exploits special content type: `multipart/x-mixed-replace` that informs the client to replace the image if necessary. **Separate HTTP server is used** (hence the non-standard port 81), as it easiest way to continously send parts (next frames) in this single one endless request.
@@ -308,7 +297,7 @@ Application waits for UDP packets on port 83.
 	</tbody>
 </table>
 
-* The flags in long control packet are the same as in the short, but without motor directions flags respected. 
+* The flags in long control packet are the same as in the short, but motor directions flags are not respected. 
 * Use negative float numbers for moving backwards.
 
 
@@ -420,6 +409,7 @@ Controls:
 
 ### To-do
 
++ Add remaining controls for HTTP endpoint
 + Detailed status output, including debug stuff
 	+ Process list and stats.
 	+ Memory heap usage & fragmentation.
@@ -455,7 +445,7 @@ Controls:
 + Does STA mode groups packets before delivering?
 + Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
 + Isn't `COM8_AGC_EN` in the camera registers definitions off by 1? 
-+ Camera parameters are better described in [CircuitPython bindings docs for the esp32_camera library](https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html).
++ Camera parameters are better described in [old CircuitPython bindings docs for the esp32_camera library](https://web.archive.org/web/20221006004020/https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html) (or [newer link](https://docs.circuitpython.org/en/8.2.x/shared-bindings/espcamera/index.html), <small>probably they renamed the library wrapper</small>)
 + Create fast and C++ `constexpr` string to IP 4 function
 + NVS dump. See https://github.com/AFontaine79/Espressif-NVS-Analyzer
 + Expose nice [console](https://docs.espressif.com/projects/esp-idf/en/v4.4.3/esp32/api-reference/system/console.html) over serial monitor

@@ -1,15 +1,584 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="UTF-8">
-	<meta http-equiv="X-UA-Compatible" content="IE=edge">
+	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>YellowToyCar</title>
+	<style>
+/* Basic & utility */
+body {
+	background: #111;
+	color: #eee;
+
+	font-family: Arial, Helvetica, Sans-Serif;
+	font-size: 16px;
+
+	margin: 0;
+}
+
+.hidden {
+	display: none
+}
+
+.collapse-toggle, .collapse-content {
+	display: none
+}
+.collapse-toggle:checked + .collapse-content {
+	display: block;
+}
+
+/* Camera view */
+body > div {
+	display: flex;
+}
+
+figure#stream {
+	float: left;
+	margin: 8px;
+}
+
+/* Options menu */
+#camera-settings {
+	display: flex;
+	flex-direction: column;
+
+	min-width: 344px;
+	width: fit-content;
+
+	padding: 8px;
+	margin-top: 4px;
+
+	border-radius: 8px;
+	background: #333;
+}
+
+#camera-settings > li {
+	display: flex;
+	align-items: center;
+	flex-wrap: nowrap;
+
+	margin: 4px;
+}
+
+#camera-settings > li > label {
+	display: inline-block;
+	padding-right: 10px;
+	min-width: 40%;
+}
+#camera-settings > li input,
+#camera-settings > li select {
+	display: flex;
+	flex-grow: 1;
+	padding: 2px;
+    border-radius: 4px;
+}
+
+/* Movement controls */
+#movement-controls {
+	display: inline-block;
+
+	margin: 8px 40px;
+	padding: 4px;
+
+	text-align: center;
+
+	border-radius: 8px;
+	background: #333;
+}
+#movement-controls > label {
+	display: inline-block;
+	width: 264px;
+
+	text-align: center;
+}
+#movement-controls > div > button {
+	font-size: 40px;
+}
+button#toggleLight {
+	width: calc(100% - 8px);
+}
+
+/* Input: button */
+button {
+	margin: 4px;
+	padding: 0 12px;
+
+	background: #FFC107;
+
+	border: 0;
+	border-radius: 8px;
+
+	line-height: 28px;
+	font-size: 16px;
+	color: #000;
+
+	cursor: pointer;
+	outline: none;
+}
+button:hover {
+	background: #FFCA28;
+}
+button:active {
+	background: #FFA000;
+}
+button:disabled {
+	cursor: default;
+	background: #FFE082;
+}
+
+/* Input: switch */
+.switch input {
+	display: none !important;
+}
+
+.switch .slider {
+	width: 50px;
+	height: 22px;
+	border-radius: 22px;
+	cursor: pointer;
+	background-color: grey;
+}
+
+.slider,.slider:before {
+	display: inline-block;
+	transition: .4s;
+}
+
+.slider:before {
+	position: relative;
+	content: "";
+	border-radius: 50%;
+	height: 16px;
+	width: 16px;
+	left: 4px;
+	top: 3px;
+	background-color: #fff;
+}
+
+input:checked+.slider {
+	background-color: #FFC107;
+}
+
+input:checked+.slider:before {
+	-webkit-transform: translateX(26px);
+	transform: translateX(26px);
+}
+
+/* Input: range */
+input[type=range] {
+	display: inline-flex;
+	appearance: none;
+	width: 100%;
+	height: 22px;
+	background: inherit;
+	cursor: pointer;
+	margin: 0;
+}
+input[type=range]:focus {
+	outline: 0;
+}
+input[type=range]::-webkit-slider-runnable-track {
+	width: 100%;
+	height: 2px;
+	cursor: pointer;
+	background: #eee;
+}
+input[type=range]::-webkit-slider-thumb {
+	height: 17px;
+	width: 17px;
+	border-radius: 17px;
+	background: #FFC107;
+	-webkit-appearance: none;
+	margin-top: -8.5px;
+}
+.range-max, .range-min {
+	display: inline-block;
+	padding: 0 5px;
+}
+	</style>
+	<script>
+const $ = document.querySelector.bind(document);
+const $$ = document.querySelectorAll.bind(document);
+const hide = e => e.classList.add('hidden');
+const show = e => e.classList.remove('hidden');
+	</script>
 </head>
 <body>
-	<h1>YellowToyCar</h1>
-	<p>
-		Hello from ESP!
-	</p>
+	<div>
+		<label for="camera-settings-toggle" style="display:block;padding:4px">&nbsp;&nbsp;&#9776;&nbsp;&nbsp;Camera settings&nbsp;&nbsp;&nbsp;&nbsp;📷&nbsp;&nbsp;🎥&nbsp;&nbsp;</label>
+	</div>
+	<div>
+		<aside>
+			<input class="collapse-toggle" type="checkbox" id="camera-settings-toggle" checked>
+			<div class="collapse-content">
+				<ul id="camera-settings">
+					<li style="display: grid; grid-template-columns: 40% 60%">
+						<button id="show-image">Show frame</button>
+						<button id="show-video">Show video</button>
+						<button id="stop-video" class="hidden">Stop video</button>
+						<button id="save-image">Save frame</button>
+						<button id="record-video">Record video</button>
+						<button id="stop-recording" class="hidden">Stop recording</button>
+					</li>
+				</ul>
+			</div>
+		</aside>
+		<main>
+			<figure id="stream">
+				<canvas>
+					<img crossorigin="anonymous" src=""/>
+				</canvas>
+			</figure>
+		</main>
+	</div>
+	<script>
+const baseHost = document.location.origin;
+
+function sendConfig(object) {
+	fetch(`${baseHost}/config`, {
+		method: 'POST',
+		body: JSON.stringify(object),
+	})
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+	function getElementValue(e) {
+		switch (e.target.type) {
+			case 'checkbox':
+				return e.target.checked ? 1 : 0
+			case 'number':
+			case 'range':
+				return e.target.value * 1
+			case 'button':
+			case 'submit':
+				return true
+			case 'select':
+			case 'select-one':
+			default:
+				return e.target.value
+		}
+	}
+
+	let settingsList;
+	let defaultOptionCallback;
+
+	function addSwitch(id, desc, checked, callback) {
+		let li = document.createElement('li')
+		let label = document.createElement('label')
+		label.innerText = desc
+		let div = document.createElement('div')
+		div.classList = 'switch'
+		let input = document.createElement('input')
+		input.type = 'checkbox'
+		input.checked = !!checked
+		input.onchange = callback ? callback : defaultOptionCallback;
+		let slider = document.createElement('label')
+		slider.classList = 'slider'
+		slider.htmlFor = label.htmlFor = input.id = id
+		div.appendChild(input)
+		div.appendChild(slider)
+		li.appendChild(label);
+		li.appendChild(div);
+		li.id = id + '-group'
+		settingsList.appendChild(li)
+	}
+	function addRange(id, desc, minValue, maxValue, currentValue, callback) {
+		let li = document.createElement('li')
+		let label = document.createElement('label')
+		label.innerText = desc
+		let minDiv = document.createElement('div')
+		minDiv.classList = 'range-min'
+		minDiv.innerText = '' + minValue
+		let maxDiv = document.createElement('div')
+		maxDiv.classList = 'range-max'
+		maxDiv.innerText = '' + maxValue
+		let input = document.createElement('input')
+		input.type = 'range'
+		input.min = minValue
+		input.max = maxValue
+		input.value = currentValue
+		input.onchange = callback ? callback : defaultOptionCallback;
+		label.htmlFor = input.id = id
+		li.appendChild(label)
+		li.appendChild(minDiv)
+		li.appendChild(input)
+		li.appendChild(maxDiv)
+		li.id = id + '-group'
+		settingsList.appendChild(li)
+	}
+	function addSelectOne(id, desc, options, currentValue, callback) {
+		let li = document.createElement('li')
+		let label = document.createElement('label')
+		label.innerText = desc
+		let select = document.createElement('select')
+		for (const [k, v] of Object.entries(options)) {
+			let option = document.createElement('option')
+			option.innerText = k
+			option.value = v
+			if (currentValue == v) {
+				option.selected = 'selected'
+			}
+			select.appendChild(option);
+		}
+		select.onchange = callback ? callback : defaultOptionCallback;
+		label.htmlFor = select.id = id
+		li.appendChild(label)
+		li.appendChild(select)
+		li.id = id + '-group'
+		settingsList.appendChild(li)
+	}
+
+	/* Camera settings definition */
+	settingsList = $('#camera-settings');
+	defaultOptionCallback = (e) => sendConfig({
+		control: Object.fromEntries([[e.target.id, getElementValue(e)]])
+	})
+
+	addSwitch('mainLight', 'Main light', false);
+	addSwitch('otherLight', 'Other light', false);
+
+	defaultOptionCallback = (e) => sendConfig({
+		camera: Object.fromEntries([[e.target.id, getElementValue(e)]])
+	})
+
+	addSelectOne('framesize', 'Framesize', Object.fromEntries([
+		'96x96',
+		'160x120',
+		'176x144',
+		'240x176',
+		'240x240',
+		'320x240',
+		'400x296',
+		'480x320',
+		'640x480',
+		'800x600',
+		'1024x768',
+		'1280x720',
+		'1280x1024',
+		'1600x1200',
+	].map(x => [x, i])), 5);
+
+	addRange('quality', 'Quality',  10, 63, 10);
+
+	addRange('brightness', 'Brightness', -2, 2, 0);
+	addRange('contrast', 'Contrast', -2, 2, 0);
+	addRange('saturation', 'Saturation', -2, 2, 0);
+
+	addSelectOne('special_effect', 'Special effects', {
+		'No effect': 0,
+		'Negative':  1,
+		'Grayscale': 2,
+		'Red':       3,
+		'Green':     4,
+		'Blue':      5,
+		'Sepia':     6,
+	}, 0);
+
+	addSwitch('awb', 'AWB', true);
+	addSwitch('awb_gain', 'AWB Gain', true, (e) => {
+		defaultOptionCallback(e);
+		(e.target.checked ? show : hide)($('#wb_mode-group'));
+	});
+	addSelectOne('wb_mode', 'WB mode', {
+		'Automatic': 0,
+		'Sunny':     1,
+		'Cloudy':    2,
+		'Office':    3,
+		'House':     4,
+	}, 0);
+
+	addSwitch('aec', 'AEC Sensor', true, (e) => {
+		defaultOptionCallback(e);
+		(e.target.checked ? hide : show)($('#aec_value-group'));
+	});
+	addSwitch('aec2', 'AEC DSP', true);
+	addRange('ae_level', 'AE level', -2, 2, 0);
+	addRange('aec_value', 'AEC value', 0, 1200, 204);
+
+	addSwitch('agc', 'AGC', true, (e) => {
+		defaultOptionCallback(e);
+		(e.target.checked ? show : hide)($('#gainceiling-group'));
+		(e.target.checked ? hide : show)($('#agc_gain-group'));
+	});
+	addRange('agc_gain', 'AGC Gain', 0, 30, 5);
+	addRange('gain_ceiling', 'AGC Gain Ceiling', 0, 6, 0);
+
+	addSwitch('bpc', 'BPC', true);
+	addSwitch('wpc', 'WPC', true);
+	addSwitch('raw_gma', 'Raw GMA', true);
+	addSwitch('lenc', 'Lens Correction', true);
+	addSwitch('dcw', 'DCW', true);
+
+	addSwitch('hmirror', 'H-Mirror', false);
+	addSwitch('vflip', 'V-Flip', false);
+
+	/* Displaying */
+	const streamContainer = $('figure#stream')
+	const streamCanvas = $('#stream canvas')
+	const streamImage = $('#stream img')
+	const showImageButton = $('button#show-image');
+	const showVideoButton = $('button#show-video');
+	const stopVideoButton = $('button#stop-video');
+
+	function startStream() {
+		hide(showVideoButton);
+		show(stopVideoButton);
+		streamImage.src = '';
+		streamImage.src = `${baseHost}:81/stream`;
+		show(streamContainer);
+	}
+	function stopStream() {
+		hide(stopVideoButton);
+		show(showVideoButton);
+		window.stop();
+	}
+
+	showImageButton.addEventListener('click', () => {
+		stopStream();
+		streamImage.src = `${baseHost}/capture?_cb=${Date.now()}`;
+		show(streamContainer);
+	})
+	showVideoButton.addEventListener('click', startStream)
+	stopVideoButton.addEventListener('click', stopStream)
+
+	/* Recording */
+	const saveImageButton = $('button#save-image');
+	const recordVideoButton = $('button#record-video');
+	const stopRecordingButton = $('button#stop-recording');
+	let mediaRecorder;
+	let recordingBlob;
+
+	function currentTimestampFilename() {
+		return new Date().toLocaleString('sv').replaceAll(':', '-').replace(' ', '_')
+	}
+
+	function startRecording() {
+		let recordingType;
+		for (const type of [
+			"video/webm",
+			"video/webm;codecs=vp8",
+			"video/webm;codecs=vp9",
+			"video/webm;codecs=h264",
+			"video/x-matroska;codecs=avc1"
+		]) {
+			if (MediaRecorder.isTypeSupported(type)) {
+				recordingType = type;
+				break;
+			}
+		}
+		if (recordingType == undefined) {
+			console.error('No supported type found for MediaRecorder');
+			return;
+		}
+
+		const stream = streamCanvas.captureStream();
+		if (!stream) {
+			console.error('No capture stream of canvas');
+			return;
+		}
+
+		try {
+			mediaRecorder = new MediaRecorder(stream, {
+				mimeType: recordingType,
+				videoBitsPerSecond: 3000000
+			});
+		}
+		catch (e) {
+			console.error('Exception while creating MediaRecorder: ', e);
+		}
+
+		hide(recordVideoButton);
+		show(stopRecordingButton);
+
+		mediaRecorder.addEventListener('stop', () => {
+			hide(stopRecordingButton);
+			show(recordVideoButton);
+
+			const url = URL.createObjectURL(recordingBlob)
+			let a = document.createElement('a');
+			a.href = url;
+			a.download = currentTimestampFilename() + '.webm';
+			document.body.appendChild(a);
+			a.click();
+			setTimeout(() => {
+				a.remove();
+				URL.revokeObjectURL(url);
+			}, 999);
+		})
+		mediaRecorder.addEventListener('dataavailable', e => {
+			if (e.data && e.data.size > 0) {
+				recordingBlob = e.data
+			}
+		})
+		mediaRecorder.start();
+	}
+	function stopRecording() {
+		mediaRecorder.stop()
+	}
+
+	saveImageButton.addEventListener('click', () => {
+		const url = streamCanvas.toDataURL('image/jpeg', 1.0)
+		let a = document.createElement('a');
+		a.href = url;
+		a.download = currentTimestampFilename() + '.jpg';
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+	})
+	recordVideoButton.addEventListener('click', startRecording)
+	stopRecordingButton.addEventListener('click', stopRecording)
+
+	let streamCanvasInterval;
+	streamImage.addEventListener('load', () => {
+		clearInterval(streamCanvasInterval);
+		streamCanvasInterval = setInterval(() => {
+			streamCanvas.width = streamImage.naturalWidth;
+			streamCanvas.height = streamImage.naturalHeight;
+			streamCanvas.getContext('2d').drawImage(streamImage, 0, 0);
+		}, 1000 / 30);
+	})
+
+	/* Update initial values */
+	function setElementValue(e, v) {
+		if (!e) return;
+		if (e.type == 'checkbox') {
+			e.checked = !!v
+		} 
+		else {
+			e.value = v
+		}
+	}
+	fetch(`${baseHost}/config`)
+		.then(r => r.json())
+		.then((state) => {
+			for (var key in state.camera) {
+				const value = state.camera[key]
+				const input = document.getElementById(key)
+				setElementValue(input, value);
+				if (!input) {
+					console.warn(`Option ${key} not found in options bar. Value: ${value}`)
+				}
+				switch (key) {
+					case 'aec':
+						(value ? hide : show)($('#aec_value-group'));
+						break;
+					case 'agc':
+						(value ? show : hide)($('#gain_ceiling-group'));
+						(value ? hide : show)($('#agc_gain-group'));
+						break;
+					case 'awb_gain':
+						(value ? show : hide)($('#wb_mode-group'));
+						break;
+					default:
+						break;
+				}
+			}
+			for (const key of ['mainLight', 'otherLight']) {
+				setElementValue(document.getElementById(key), state.control[key]);
+			}
+		})
+	;
+});
+	</script>
 </body>
 </html>

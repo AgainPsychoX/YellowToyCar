@@ -17,6 +17,8 @@ files_to_gzip = []
 for extension in filetypes_to_gzip:
 	files_to_gzip.extend(glob.glob(os.path.join(src_dir_path, '*.' + extension ) ) )
 
+# TODO: https://pypi.org/project/css-html-js-minify/
+
 for source_file_path in files_to_gzip:
 	target_file_path = source_file_path + '.gz'
 	if (os.path.exists(target_file_path)):
