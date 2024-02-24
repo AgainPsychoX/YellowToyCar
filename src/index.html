@@ -17,7 +17,7 @@ body {
 }
 
 .hidden {
-	display: none
+	display: none !important
 }
 
 .collapse-toggle, .collapse-content {
@@ -397,7 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	addSwitch('agc', 'AGC', true, (e) => {
 		defaultOptionCallback(e);
-		(e.target.checked ? show : hide)($('#gainceiling-group'));
+		(e.target.checked ? show : hide)($('#gain_ceiling-group'));
 		(e.target.checked ? hide : show)($('#agc_gain-group'));
 	});
 	addRange('agc_gain', 'AGC Gain', 0, 30, 5);
