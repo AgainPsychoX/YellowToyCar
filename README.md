@@ -404,6 +404,7 @@ Controls:
 
 * [ESP-IDF 4.4.3 for ESP32 - Programming Guide](https://docs.espressif.com/projects/esp-idf/en/v4.4.3/esp32/index.html) - including API references, examples, guides and other resources.
 * [YouTube series about RTOS](https://www.youtube.com/watch?v=F321087yYy4&list=PLEBQazB0HUyQ4hAPU1cJED6t3DU0h34bz) by Digi-Key. Great introduction to ESP32-flavoured RTOS, with exercises for viewer.
+* [Program to record an MJPEG AVI video on the SD Card of an ESP32-CAM](https://github.com/jameszah/ESP32-CAM-Video-Recorder), along with many useful notes about ESP32-CAM and low cost recording to [AVI](https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference) itself.
 
 
 
@@ -418,7 +419,6 @@ Controls:
 	+ CPU pins:
 		+ One core for HTTP and trash tasks
 		+ Other core for networking & fast control (UDP)
-	+ Use mutex to lock frame buffer between capture and streaming.
 	+ Trace tasks? `vTaskList`/`uxTaskGetSystemState`
 + Website
 	+ Camera
@@ -436,6 +436,7 @@ Controls:
 + [SNTP time sync](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/system_time.html#sntp-time-synchronization)
 	+ Make pool server and timezone configurable
 + Create our own `Kconfig` file to keep optional features there, including some debugging. Also see https://esp32tutorials.com/esp32-static-fixed-ip-address-esp-idf/ 
++ Consider using some error codes instead full error messages (maybe some macro?)
 + Allow some calibration for motors
 + Allow changing frequency for PWM signals for motors
 + Control LEDs with PWM?
@@ -443,6 +444,8 @@ Controls:
 + How does JSMN JSON handle escaping characters? Some strings like SSID/PSK might be invalid...
 + How do we nicely pass understandable error, i.e. from parsing config to response? https://github.com/TartanLlama/expected 👀
 + Does STA mode groups packets before delivering?
++ Fix `esp32-camera` `fb_size` when using JPEG to allow smallest 96x96 to work. Having minimum of 2048 seems to work, using more for good measure seems advised. [(issue on github)](https://github.com/espressif/esp32-camera/issues/436)
++ [Investigate rare bad JPEG issues](https://github.com/espressif/esp32-camera/issues/162) (missing 0xD9 and junk data).
 + Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
 + Isn't `COM8_AGC_EN` in the camera registers definitions off by 1? 
 + Camera parameters are better described in [old CircuitPython bindings docs for the esp32_camera library](https://web.archive.org/web/20221006004020/https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html) (or [newer link](https://docs.circuitpython.org/en/8.2.x/shared-bindings/espcamera/index.html), <small>probably they renamed the library wrapper</small>)

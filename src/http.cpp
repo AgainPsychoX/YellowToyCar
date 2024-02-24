@@ -4,13 +4,12 @@
 #include <cstdio>
 #include <string_view>
 #include <esp_log.h>
-#include <esp_netif.h>
 #include <esp_wifi.h>
 #include <freertos/timers.h>
 #include <esp_http_server.h>
-#include <esp_camera.h>
 #include <jsmn.h>
 #include "common.hpp"
+#include "camera.hpp"
 
 namespace app::network { // from network.cpp
 	esp_err_t config(char* input, jsmntok_t* root, char* output, size_t output_length, int* output_return); 
@@ -47,19 +46,6 @@ inline esp_err_t httpd_register_uri_handler(httpd_handle_t handle, const httpd_u
 	}
 #define GENERATE_HTTPD_HANDLER_FOR_EMBEDDED_FILE(snake_name, type, encoding) \
 	GENERATE_HTTPD_HANDLER_FOR_EMBEDDED_FILE_I(snake_name, type, encoding)
-
-/// Helper to avoid forgetting returning buffer
-struct esp_camera_fb_guard
-{
-	camera_fb_t* fb;
-
-	esp_camera_fb_guard() {
-		fb = esp_camera_fb_get();
-	}
-	~esp_camera_fb_guard() {
-		if (fb) esp_camera_fb_return(fb);
-	}
-};
 
 std::string_view skipToQuerystring(std::string_view uri) {
 	auto pos = uri.rfind('?');
@@ -491,14 +477,14 @@ esp_err_t config_handler(httpd_req_t* req)
 esp_err_t capture_handler(httpd_req_t* req)
 {
 	uint64_t start = esp_timer_get_time();
-	auto [fb] = esp_camera_fb_guard();
+	auto fb = camera::FrameBufferGuard::take();
 	if (unlikely(!fb)) {
 		ESP_LOGE(TAG_HTTPD_MAIN, "Failed to get frame buffer of camera");
 		httpd_resp_send_500(req);
 		return ESP_FAIL;
 	}
 	uint64_t end = esp_timer_get_time();
-	ESP_LOGI(TAG_HTTPD_MAIN, "Frame captured. Time: %llu us. Length: %u\n", end - start, fb->len);
+	ESP_LOGI(TAG_HTTPD_MAIN, "Frame captured. Time: %llu us. Length: %u", end - start, fb->len);
 
 	switch (fb->format) {
 		case PIXFORMAT_JPEG: {
@@ -509,10 +495,16 @@ esp_err_t capture_handler(httpd_req_t* req)
 		}
 		// TODO: return BMP if PIXFORMAT_RGB565, see https://en.wikipedia.org/wiki/BMP_file_format
 		default: {
-			ESP_LOGE(TAG_HTTPD_MAIN, "Camera frame with invalid format: %d ", fb->format);
-			httpd_resp_send_500(req);
-			return ESP_FAIL;
+			httpd_resp_set_type(req, "application/octet-stream");
+			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.bin");
+			httpd_resp_send(req, (const char*)fb->buf, fb->len);
+			return ESP_OK;
 		}
+		// default: {
+		// 	ESP_LOGE(TAG_HTTPD_MAIN, "Camera frame with invalid format: %d ", fb->format);
+		// 	httpd_resp_send_500(req);
+		// 	return ESP_FAIL;
+		// }
 	}
 }
 
@@ -583,8 +575,8 @@ esp_err_t stream_handler(httpd_req_t* req)
 	httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
 	ESP_LOGI(TAG_HTTPD_STREAM, "Starting stream");
-	for (;;) {	
-		auto [fb] = esp_camera_fb_guard();
+	for (;;) {
+		auto fb = camera::FrameBufferGuard::take();
 		if (unlikely(!fb)) {
 			ESP_LOGE(TAG_HTTPD_STREAM, "Failed to get frame buffer of camera");
 			httpd_resp_send_500(req);

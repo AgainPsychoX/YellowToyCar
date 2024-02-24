@@ -1,8 +1,10 @@
 #pragma once
 #include <sdkconfig.h>
 #include <string_view>
+#include <utility>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 
 ////////////////////////////////////////////////////////////////////////////////
 // Error handling
@@ -66,6 +68,44 @@ inline void delay(const TickType_t millis)
 
 /// Type returned from `esp_timer_get_time` function, which returns time in microseconds since boot.
 using uptime_t = std::invoke_result_t<decltype(esp_timer_get_time)>;
+
+////////////////////////////////////////////////////////////////////////////////
+// Concurency
+
+/// Helper class to automatically give up semaphore on end of scope.
+class SemaphoreGuard
+{
+	SemaphoreHandle_t handle;
+
+protected:
+	SemaphoreGuard(SemaphoreHandle_t handle) 
+		: handle(handle)
+	{}
+
+public:
+	SemaphoreGuard(SemaphoreGuard&& o) 
+		: handle(std::exchange(o.handle, nullptr))
+	{}
+
+	~SemaphoreGuard()
+	{
+		if (handle)
+			xSemaphoreGive(handle);
+	}
+
+	operator bool() const
+	{
+		return handle != nullptr;
+	}
+
+	static SemaphoreGuard take(
+		SemaphoreHandle_t handle, 
+		TickType_t blockTime = portMAX_DELAY
+	) {
+		bool taken = xSemaphoreTake(handle, blockTime);
+		return SemaphoreGuard { taken ? handle : nullptr };
+	}
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Parsing and processing

@@ -1,23 +1,65 @@
-#include <sdkconfig.h>
+#include "camera.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cctype>
 #include <esp_err.h>
 #include <esp_log.h>
-#include <esp_camera.h>
 #include <jsmn.h>
 #include <to_string.hpp>
 #include "common.hpp"
 
+// Ugly way to force debug & verbose logs to appear, see README > Known issues.
+#undef ESP_LOGD
+#define ESP_LOGD(...) ESP_LOGI(__VA_ARGS__)
+
 namespace app::camera
 {
 
-#define NVS_CAMERA_NAMESPACE "camera"
+static const char* TAG_CAMERA = "camera";
+
+////////////////////////////////////////////////////////////////////////////////
+// Utils
+
+SemaphoreHandle_t mutex;
+
+FrameBufferGuard::~FrameBufferGuard()
+{
+	if (likely(fb)) esp_camera_fb_return(fb);
+}
+
+FrameBufferGuard FrameBufferGuard::take(TickType_t blockTime)
+{
+	camera_fb_t* fb = nullptr;
+	auto sg = SemaphoreGuard::take(mutex, blockTime);
+	if (sg) {
+		fb = esp_camera_fb_get();
+	}
+	return FrameBufferGuard { std::move(sg), fb };
+}
+
+/// Checks the camera module & current configuration ability to take picture.
+/// Returns true if buffer acquired. Returns false and logs in case of error.
+bool check_can_take_picture()
+{
+	camera_fb_t* fb = esp_camera_fb_get();
+	if (unlikely(!fb)) {
+		ESP_LOGE(TAG_CAMERA, "Failed to get frame buffer");
+		return false;
+	}
+	esp_camera_fb_return(fb);
+	return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Initialization
 
 #include "camera_pins.hpp"
 
-void init(void)
-{
+/// Initializes the camera module using common config.
+esp_err_t my_esp_camera_init(
+	pixformat_t pixformat = PIXFORMAT_JPEG, // For most common applications
+	framesize_t framesize = FRAMESIZE_UXGA  // Max for OV2640
+) {
 	camera_config_t camera_config = {
 		.pin_pwdn  = CAM_PIN_PWDN,
 		.pin_reset = CAM_PIN_RESET,
@@ -38,9 +80,9 @@ void init(void)
 		.xclk_freq_hz = 20000000,
 		.ledc_timer = LEDC_TIMER_0,
 		.ledc_channel = LEDC_CHANNEL_0,
-		.pixel_format = PIXFORMAT_JPEG,
-		.frame_size = FRAMESIZE_UXGA, // Max for OV2640
-		.jpeg_quality = 12, // 0-63, lower number means higher quality
+		.pixel_format = pixformat,
+		.frame_size = framesize,
+		.jpeg_quality = framesize == FRAMESIZE_96X96 ? 48 : 12,
 		.fb_count = 4,
 	#ifdef BOARD_HAS_PSRAM
 		.fb_location	= CAMERA_FB_IN_PSRAM,
@@ -48,13 +90,83 @@ void init(void)
 		.fb_location	= CAMERA_FB_IN_DRAM, 
 	#endif
 		.grab_mode = CAMERA_GRAB_LATEST, 
+		// TODO: consider using other fb_count & grab_mode for streaming, 
+		//	and other for AI processing (maybe even CAMERA_FB_IN_DRAM?)
 	};
-	ESP_ERROR_CHECK(esp_camera_init(&camera_config));
-	
+	return esp_camera_init(&camera_config);
+}
+
+#define NVS_CAMERA_NAMESPACE "camera"
+
+/// Reinitializes the camera module, finalizing applying some settings.
+/// Required for pixel format & framesize changes.
+void reinit() 
+{
+	auto guard = SemaphoreGuard::take(mutex);
+
+	ESP_LOGD(TAG_CAMERA, "beginning reinit");
+	sensor_t* sensor = esp_camera_sensor_get();
+	if (unlikely(!sensor)) {
+		ESP_LOGE(TAG_CAMERA, "Failed to get camera handle");
+		goto fail;
+	}
+	else /* got sensor handle */ {
+		// Remember the settings required for re-initialization
+		pixformat_t pixformat = sensor->pixformat;
+		framesize_t framesize = sensor->status.framesize;
+
+		ESP_LOGD(TAG_CAMERA, "calling deinit");
+		ESP_IGNORE_ERROR(esp_camera_deinit());
+
+		ESP_LOGD(TAG_CAMERA, "deinit finished, calling init");
+		ESP_ERROR_CHECK_OR_GOTO(fail, my_esp_camera_init(pixformat, framesize));
+		// (error logged inside the function)
+
+		ESP_LOGD(TAG_CAMERA, "loading settings from NVS after reinit");
+		ESP_ERROR_CHECK_OR_GOTO(fail, esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE));
+		// (error logged inside the function)
+
+		ESP_LOGD(TAG_CAMERA, "testing after reinit");
+		if (!check_can_take_picture()) { 
+			// (error logged inside the function)
+			goto fail;
+		}
+
+		ESP_LOGD(TAG_CAMERA, "finished reinit");
+		return;
+	}
+
+fail:
+	return; // FIXME: ...
+	ESP_LOGW(TAG_CAMERA, "Failed to reinitialize, trying to fall back to defaults");
+
+	ESP_IGNORE_ERROR(esp_camera_deinit());
+
+	ESP_ERROR_CHECK(my_esp_camera_init()); // with most default/safe settings
+	check_can_take_picture(); // (logs in case of error)
+}
+
+/// Initializes the camera related code.
+void init()
+{
+	mutex = xSemaphoreCreateMutex();
+
+	// Note: `esp_camera_load_from_nvs` requires sensor to be initialized,
+	// so default/safe settings initializations needs to be performed first.
+
+	ESP_ERROR_CHECK(my_esp_camera_init());
+	check_can_take_picture();
+
 	if (esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE) != ESP_OK) {
-		/* Fallback to some default settings */
+		// Continuing with defaults (error logged inside the function)
+	}
+	else /* loaded from NVS successfully */ {
+		reinit(); // will use settings loaded from NVS
 	}
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Configuration
 
 inline bool has_simple_value(const jsmntok_t* token) {
 	if (token->type == JSMN_UNDEFINED) return false;
@@ -134,6 +246,14 @@ esp_err_t config(
 		return ESP_FAIL;
 	}
 
+	// Full re-initialization might be required if either of is true:
+	// + pixformat is changed, 
+	// + framesize is changed outside JPEG mode,
+	// + framesize is widened inside JPEG mode,
+	// See comment from the library maintainer https://github.com/espressif/esp32-camera/issues/612#issuecomment-1880837969
+	// and source code of esp32-camera (especially `cam_config` function).
+	bool require_reinit = false;
+
 	if (input) {
 		if (unlikely(root->type != JSMN_OBJECT))
 			return ESP_FAIL;
@@ -151,14 +271,24 @@ esp_err_t config(
 				return ESP_FAIL;
 			const size_t value_length = value_token->end - value_token->start;
 			switch (fnv1a32(input + key_token->start, input + key_token->end)) {
-				case fnv1a32("framesize"):
+				case fnv1a32("framesize"): {
 					input[value_token->end] = 0;
-					sensor->set_framesize(sensor, parse_framesize({input + value_token->start, value_length}));
+					auto framesize = parse_framesize({input + value_token->start, value_length});
+					if (sensor->status.framesize != framesize) {
+						require_reinit = true;
+					}
+					sensor->set_framesize(sensor, framesize);
 					break;
-				case fnv1a32("pixformat"):
+				}	
+				case fnv1a32("pixformat"): {
 					input[value_token->end] = 0;
-					sensor->set_pixformat(sensor, parse_pixformat({input + value_token->start, value_length}));
+					auto pixformat = parse_pixformat({input + value_token->start, value_length});
+					if (sensor->pixformat != pixformat) {
+						require_reinit = true;
+					}
+					sensor->set_pixformat(sensor, pixformat);
 					break;
+				}
 				case fnv1a32("quality"): /* for JPEG compression */
 					sensor->set_quality(sensor, std::atoi(input + value_token->start));
 					break;
@@ -334,7 +464,10 @@ esp_err_t config(
 		);
 	}
 
-	esp_camera_save_to_nvs(NVS_CAMERA_NAMESPACE);
+	if (require_reinit) {
+		esp_camera_save_to_nvs(NVS_CAMERA_NAMESPACE);
+		reinit();
+	}
 
 	return ESP_OK;
 }

@@ -3,8 +3,8 @@
 	"editor.tabSize": 4,
 	"files.associations": {
 		"*.log": "vt100",
-		"*.mcfunction": "ignore",
 		"*.mod": "plaintext",
+		"*.mcfunction": "ignore",
 		"Kconfig": "shellscript",
 		"Kconfig.projbuild": "shellscript",
 		"typeinfo": "cpp",
@@ -62,7 +62,8 @@
 		"new": "cpp",
 		"stdexcept": "cpp",
 		"streambuf": "cpp",
-		"thread": "cpp"
+		"thread": "cpp",
+		"esp_system.h": "c"
 	},
 	"cSpell.words": [
 		"APSTA",
@@ -94,6 +95,7 @@
 		"IMREAD",
 		"imshow",
 		"ipcx",
+		"IRAM",
 		"jsmn",
 		"jsmntok",
 		"kbhit",
