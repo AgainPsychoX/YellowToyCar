@@ -1,6 +1,7 @@
+import os
 import argparse
 from benedict import benedict
-from time import time
+from time import time, strftime
 import cv2
 import requests
 import numpy as np
@@ -22,6 +23,9 @@ def check_window_is_closed(window_name):
 	except Exception: # might throw null pointer exception if window already closed
 		return True
 
+def generate_frame_filename_for_saving(index):
+	timestamp = strftime("%Y%m%d_%H%M%S")
+	return f'{index:0>4}_{timestamp}'
 
 def handle_mjpeg_stream(args, config):
 	# Some code adapter from https://stackoverflow.com/questions/21702477/how-to-parse-mjpeg-http-stream-from-ip-camera
@@ -50,6 +54,10 @@ def handle_mjpeg_stream(args, config):
 			fps = total_frames / from_start
 			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps}')
 
+			if args.save:
+				filename = generate_frame_filename_for_saving(total_frames) + '.jpg'
+				cv2.imwrite(os.path.join(args.save, filename), image)
+
 			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
 			if check_window_is_closed(window_name) or esc_or_q_pressed:
 				break
@@ -61,6 +69,10 @@ def handle_jpeg_frame(args, config):
 	if request.status_code == 200:
 		image = cv2.imdecode(np.frombuffer(request.content, dtype=np.uint8), cv2.IMREAD_COLOR)
 		cv2.imshow(window_name, image)
+
+		if args.save:
+			cv2.imwrite(args.save, image)
+
 		while True:
 			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
 			if check_window_is_closed(window_name) or esc_or_q_pressed:
@@ -72,8 +84,24 @@ def main():
 	parser = argparse.ArgumentParser(description='''This script allows to retrieve camera frames from the car.''')
 	parser.add_argument('--config-file', metavar='PATH', help='JSON file to be used as config. If not provided, will be fetched from the device.', required=False)
 	parser.add_argument('--ip', '--address', help='IP of the device. Defaults to the one from the config file or 192.168.4.1.', required=False)
+	parser.add_argument('--save', metavar='PATH', help='If set, specifies path to file (or folder) for the frame (or stream) to be saved.', required=False)
 	parser.add_argument('--frame', help='If set, only saves/views single frame.', required=False, action='store_true')
 	args = parser.parse_args()
+
+	if args.save:
+		args.save = os.path.normpath(args.save)
+		if args.frame:
+			if os.path.exists(args.save):
+				print('Error: File exists on specified path, cannot save.')
+				return
+		else:
+			if os.path.isfile(args.save):
+				print('Error: File exists on specified path, cannot save.')
+				return
+			os.makedirs(args.save, exist_ok=True)
+			if len(os.listdir(args.save)) != 0:
+				print('Error: Directory is not empty')
+				return
 
 	if args.config_file:
 		config = benedict(args.config_file, format='json')

@@ -94,6 +94,7 @@
 		"imdecode",
 		"IMREAD",
 		"imshow",
+		"imwrite",
 		"ipcx",
 		"IRAM",
 		"jsmn",
