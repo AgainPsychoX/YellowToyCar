@@ -32,6 +32,7 @@ def handle_mjpeg_stream(args, config):
 	# Other solution like `cv2.VideoCapture(stream_url)` couldn't be used, as it fails to work here.
 	start = time()
 	total_frames = 0
+	saved_frames = 0
 	request = requests.get(f'http://{args.ip}:81/stream', stream=True)
 	if request.status_code == 200:
 		buffer = bytes()
@@ -55,8 +56,11 @@ def handle_mjpeg_stream(args, config):
 			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps}')
 
 			if args.save:
-				filename = generate_frame_filename_for_saving(total_frames) + '.jpg'
-				cv2.imwrite(os.path.join(args.save, filename), image)
+				saved_fps = saved_frames / from_start
+				if not args.save_fps or saved_fps < args.save_fps:
+					filename = generate_frame_filename_for_saving(total_frames) + '.jpg'
+					cv2.imwrite(os.path.join(args.save, filename), image)
+					saved_frames += 1
 
 			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
 			if check_window_is_closed(window_name) or esc_or_q_pressed:
@@ -80,12 +84,22 @@ def handle_jpeg_frame(args, config):
 	else:
 		print(f'Error: Received unexpected status code {request.status_code}')
 
+def fps_type(x):
+	try:
+		x = float(x)
+	except ValueError:
+		raise argparse.ArgumentTypeError(f'{x} not a floating-point literal')
+	if x < 1:
+		raise argparse.ArgumentTypeError(f'{x} must be at least 1')
+	return x
+
 def main():
 	parser = argparse.ArgumentParser(description='''This script allows to retrieve camera frames from the car.''')
 	parser.add_argument('--config-file', metavar='PATH', help='JSON file to be used as config. If not provided, will be fetched from the device.', required=False)
-	parser.add_argument('--ip', '--address', help='IP of the device. Defaults to the one from the config file or 192.168.4.1.', required=False)
+	parser.add_argument('--ip', '--address', help=f'IP of the device. Defaults to the one from the config file or {DEFAULT_IP}.', required=False)
+	parser.add_argument('--frame', help='If set, only retrieves single frame.', required=False, action='store_true')
 	parser.add_argument('--save', metavar='PATH', help='If set, specifies path to file (or folder) for the frame (or stream) to be saved.', required=False)
-	parser.add_argument('--frame', help='If set, only saves/views single frame.', required=False, action='store_true')
+	parser.add_argument('--save-fps', metavar='FPS', help='If set, limits number of frames being saved.', required=False, type=fps_type)
 	args = parser.parse_args()
 
 	if args.save:
