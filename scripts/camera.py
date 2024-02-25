@@ -56,10 +56,23 @@ def handle_mjpeg_stream(args, config):
 	else:
 		print(f'Error: Received unexpected status code {request.status_code}')
 
+def handle_jpeg_frame(args, config):
+	request = requests.get(f'http://{args.ip}/capture')
+	if request.status_code == 200:
+		image = cv2.imdecode(np.frombuffer(request.content, dtype=np.uint8), cv2.IMREAD_COLOR)
+		cv2.imshow(window_name, image)
+		while True:
+			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
+			if check_window_is_closed(window_name) or esc_or_q_pressed:
+				break
+	else:
+		print(f'Error: Received unexpected status code {request.status_code}')
+
 def main():
-	parser = argparse.ArgumentParser(description='''This script allows to send & retrieve config from the car.''')
+	parser = argparse.ArgumentParser(description='''This script allows to retrieve camera frames from the car.''')
 	parser.add_argument('--config-file', metavar='PATH', help='JSON file to be used as config. If not provided, will be fetched from the device.', required=False)
 	parser.add_argument('--ip', '--address', help='IP of the device. Defaults to the one from the config file or 192.168.4.1.', required=False)
+	parser.add_argument('--frame', help='If set, only saves/views single frame.', required=False, action='store_true')
 	args = parser.parse_args()
 
 	if args.config_file:
@@ -82,10 +95,16 @@ def main():
 		config = benedict(f'http://{args.ip}/config', format='json', requests_options={'timeout': 5})
 
 	pixformat = int(config['camera.pixformat'])
-	if pixformat == PIXFORMAT_JPEG:
-		handle_mjpeg_stream(args, config)
-	else:
-		print('Unsupported pixel format')
+	if args.frame:
+		if pixformat == PIXFORMAT_JPEG:
+			handle_jpeg_frame(args, config)
+		else:
+			print('Unsupported pixel format')
+	else: # stream
+		if pixformat == PIXFORMAT_JPEG:
+			handle_mjpeg_stream(args, config)
+		else:
+			print('Unsupported pixel format')
 
 if __name__ == '__main__':
 	main()
