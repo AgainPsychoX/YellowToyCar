@@ -1,0 +1,2 @@
+python-benedict~=0.33.1
+requests~=2.31.0

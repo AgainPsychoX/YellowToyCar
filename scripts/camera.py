@@ -1,13 +1,19 @@
+import argparse
+from benedict import benedict
 from time import time
 import cv2
 import requests
 import numpy as np
 
-# Script adapts code from https://stackoverflow.com/questions/21702477/how-to-parse-mjpeg-http-stream-from-ip-camera
-# Other solution like `cv2.VideoCapture(stream_url)` couldn't be used, as it fails to work here.
-
-stream_url = 'http://192.168.4.1:81/stream'
 window_name = 'YellowToyCar Stream'
+
+DEFAULT_IP = '192.168.4.1' # default for ESP32 esp-idf
+
+PIXFORMAT_GRAYSCALE = 3
+PIXFORMAT_JPEG      = 4
+
+JPEG_SOI_MARKER = b'\xff\xd8'
+JPEG_EOI_MARKER = b'\xff\xd9'
 
 def check_window_is_closed(window_name):
 	try:
@@ -16,18 +22,21 @@ def check_window_is_closed(window_name):
 	except Exception: # might throw null pointer exception if window already closed
 		return True
 
-def main():
+
+def handle_mjpeg_stream(args, config):
+	# Some code adapter from https://stackoverflow.com/questions/21702477/how-to-parse-mjpeg-http-stream-from-ip-camera
+	# Other solution like `cv2.VideoCapture(stream_url)` couldn't be used, as it fails to work here.
 	start = time()
 	total_frames = 0
-	request = requests.get(stream_url, stream=True)
+	request = requests.get(f'http://{args.ip}:81/stream', stream=True)
 	if request.status_code == 200:
 		buffer = bytes()
 		for chunk in request.iter_content(chunk_size=4096):
 			buffer += chunk
-			a = buffer.find(b'\xff\xd8')
+			a = buffer.find(JPEG_SOI_MARKER)
 			if a == -1:
 				continue
-			b = buffer.find(b'\xff\xd9', a)
+			b = buffer.find(JPEG_EOI_MARKER, a)
 			if b == -1:
 				continue
 
@@ -47,6 +56,36 @@ def main():
 	else:
 		print(f'Error: Received unexpected status code {request.status_code}')
 
+def main():
+	parser = argparse.ArgumentParser(description='''This script allows to send & retrieve config from the car.''')
+	parser.add_argument('--config-file', metavar='PATH', help='JSON file to be used as config. If not provided, will be fetched from the device.', required=False)
+	parser.add_argument('--ip', '--address', help='IP of the device. Defaults to the one from the config file or 192.168.4.1.', required=False)
+	args = parser.parse_args()
+
+	if args.config_file:
+		config = benedict(args.config_file, format='json')
+		if config.get('network.ap.ip'):
+			args.ip = config['network.ap.ip']
+			print(f'Using IP from AP configuration: {args.ip}')
+		elif config.get('network.sta.ip'):
+			args.ip = config['network.sta.ip']
+			print(f'Using IP from STA configuration: {args.ip}')
+		else:
+			args.ip = DEFAULT_IP
+			print(f'No config with IP provided, falling back to using default IP: {args.ip}')
+	else:
+		if not args.ip:
+			args.ip = DEFAULT_IP
+			print(f'No config nor IP provided, falling back to using default IP: {args.ip}')
+
+		print('Fetching the config from the device')
+		config = benedict(f'http://{args.ip}/config', format='json', requests_options={'timeout': 5})
+
+	pixformat = int(config['camera.pixformat'])
+	if pixformat == PIXFORMAT_JPEG:
+		handle_mjpeg_stream(args, config)
+	else:
+		print('Unsupported pixel format')
 
 if __name__ == '__main__':
 	main()
