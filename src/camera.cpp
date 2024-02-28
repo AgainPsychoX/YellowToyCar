@@ -82,7 +82,7 @@ esp_err_t my_esp_camera_init(
 		.ledc_channel = LEDC_CHANNEL_0,
 		.pixel_format = pixformat,
 		.frame_size = framesize,
-		.jpeg_quality = framesize == FRAMESIZE_96X96 ? 48 : 12,
+		.jpeg_quality = 12,
 		.fb_count = 4,
 	#ifdef BOARD_HAS_PSRAM
 		.fb_location	= CAMERA_FB_IN_PSRAM,
@@ -137,7 +137,7 @@ void reinit()
 	}
 
 fail:
-	return; // FIXME: ...
+	return; // FIXME: ...; Note: now disabled for debugging
 	ESP_LOGW(TAG_CAMERA, "Failed to reinitialize, trying to fall back to defaults");
 
 	ESP_IGNORE_ERROR(esp_camera_deinit());

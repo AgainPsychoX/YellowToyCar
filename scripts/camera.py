@@ -16,6 +16,23 @@ PIXFORMAT_JPEG      = 4
 JPEG_SOI_MARKER = b'\xff\xd8'
 JPEG_EOI_MARKER = b'\xff\xd9'
 
+FRAMESIZE_TO_DIMS = [
+	(96, 96),      # FRAMESIZE_96X96
+	(160, 120),    # FRAMESIZE_QQVGA
+	(176, 144),    # FRAMESIZE_QCIF
+	(240, 176),    # FRAMESIZE_HQVGA
+	(240, 240),    # FRAMESIZE_240X240
+	(320, 240),    # FRAMESIZE_QVGA
+	(400, 296),    # FRAMESIZE_CIF
+	(480, 320),    # FRAMESIZE_HVGA
+	(640, 480),    # FRAMESIZE_VGA
+	(800, 600),    # FRAMESIZE_SVGA
+	(1024, 768),   # FRAMESIZE_XGA
+	(1280, 720),   # FRAMESIZE_HD
+	(1280, 1024),  # FRAMESIZE_SXGA
+	(1600, 1200),  # FRAMESIZE_UXGA
+]
+
 def check_window_is_closed(window_name):
 	try:
 		cv2.pollKey() # required on some backends to update window state by running queued up events handling
@@ -26,6 +43,8 @@ def check_window_is_closed(window_name):
 def generate_frame_filename_for_saving(index):
 	timestamp = strftime("%Y%m%d_%H%M%S")
 	return f'{index:0>4}_{timestamp}'
+
+################################################################################
 
 def handle_mjpeg_stream(args, config):
 	# Some code adapter from https://stackoverflow.com/questions/21702477/how-to-parse-mjpeg-http-stream-from-ip-camera
@@ -84,6 +103,63 @@ def handle_jpeg_frame(args, config):
 	else:
 		print(f'Error: Received unexpected status code {request.status_code}')
 
+################################################################################
+
+def handle_grayscale_stream(args, config):
+	# TODO: This doesn't support changing framesize during the stream;
+	#	It would require server to include width & height before the pixels data
+	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
+	chunk_size = width * height
+
+	start = time()
+	total_frames = 0
+	saved_frames = 0
+	request = requests.get(f'http://{args.ip}:81/stream', stream=True)
+	if request.status_code == 200:
+		for chunk in request.iter_content(chunk_size=chunk_size):
+			if len(chunk) != chunk_size:
+				continue
+
+			image = np.frombuffer(chunk, np.uint8).reshape(height, width)
+			cv2.imshow(window_name, image)
+
+			total_frames += 1
+			from_start = time() - start
+			fps = total_frames / from_start
+			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps}')
+
+			if args.save:
+				saved_fps = saved_frames / from_start
+				if not args.save_fps or saved_fps < args.save_fps:
+					filename = generate_frame_filename_for_saving(total_frames) + '.bmp'
+					cv2.imwrite(os.path.join(args.save, filename), image)
+					saved_frames += 1
+
+			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
+			if check_window_is_closed(window_name) or esc_or_q_pressed:
+				break
+	else:
+		print(f'Error: Received unexpected status code {request.status_code}')
+
+def handle_grayscale_frame(args, config):
+	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
+	request = requests.get(f'http://{args.ip}/capture')
+	if request.status_code == 200:
+		image = np.frombuffer(request.content, np.uint8).reshape(height, width)
+		cv2.imshow(window_name, image)
+
+		if args.save:
+			cv2.imwrite(args.save, image)
+
+		while True:
+			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
+			if check_window_is_closed(window_name) or esc_or_q_pressed:
+				break
+	else:
+		print(f'Error: Received unexpected status code {request.status_code}')
+
+################################################################################
+
 def fps_type(x):
 	try:
 		x = float(x)
@@ -140,11 +216,15 @@ def main():
 	if args.frame:
 		if pixformat == PIXFORMAT_JPEG:
 			handle_jpeg_frame(args, config)
+		elif pixformat == PIXFORMAT_GRAYSCALE:
+			handle_grayscale_frame(args, config)
 		else:
 			print('Unsupported pixel format')
 	else: # stream
 		if pixformat == PIXFORMAT_JPEG:
 			handle_mjpeg_stream(args, config)
+		elif pixformat == PIXFORMAT_GRAYSCALE:
+			handle_grayscale_stream(args, config)
 		else:
 			print('Unsupported pixel format')
 

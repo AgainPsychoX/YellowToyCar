@@ -396,6 +396,8 @@ Controls:
 * [The PlatformIO docs about embedding files](https://docs.platformio.org/en/latest/platforms/espressif32.html#embedding-binary-data) suggest to use prefix `_binary_src_` while accessing the start/end labels of embedded data blocks (like in  `GENERATE_HTTPD_HANDLER_FOR_EMBEDDED_FILE` macro), its not true. The docs seems outdated or invalid in some areas, at least for `esp-idf`. However I found **solution**: Use both `board_build.embed_files` in `platformio.ini` and also `EMBED_FILES` in `CMakeLists.txt`. In code, use `_binary_`, without `src_` part.
 * Code style is a bit mess, `snake_case` mixed with `camelCase` because we use C libraries from ESP-IDF and some parts use them a lot. It's even uglier to ride a single camel in the middle of snakes.
 * There is [an issue with easy enabling `ESP_LOGV` and `ESP_LOGD` for single file](https://github.com/espressif/esp-idf/issues/8570), so I redefine those macros to `ESP_LOGI` as a workaround.
+* The `esp32-camera` library the project uses has some weird issues, here are some:
+	* When capturing small JPEGs, it maybe required to modify some library code and/or use specific JPEG quality values. What's more confusing, there are cases where using better quality (which requires more memory) results in more reliability. [(issue on GitHub)](https://github.com/espressif/esp32-camera/issues/436#issuecomment-1962142072)
 * ...
 
 

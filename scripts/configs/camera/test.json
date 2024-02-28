@@ -1,6 +1,6 @@
 {
 	"camera": {
-		"framesize": 1,
-		"pixformat": 4
+		"framesize": 0,
+		"pixformat": 3
 	}
 }

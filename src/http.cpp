@@ -495,6 +495,7 @@ esp_err_t capture_handler(httpd_req_t* req)
 		}
 		// TODO: return BMP if PIXFORMAT_RGB565, see https://en.wikipedia.org/wiki/BMP_file_format
 		default: {
+			ESP_LOGW(TAG_HTTPD_MAIN, "Camera frame with invalid format: %d ", fb->format);
 			httpd_resp_set_type(req, "application/octet-stream");
 			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.bin");
 			httpd_resp_send(req, (const char*)fb->buf, fb->len);
@@ -591,7 +592,8 @@ esp_err_t stream_handler(httpd_req_t* req)
 			}
 			// TODO: support other?
 			default: {
-				ESP_LOGE(TAG_HTTPD_STREAM, "Camera frame with invalid format: %d ", fb->format);
+				ESP_LOGW(TAG_HTTPD_STREAM, "Camera frame with invalid format: %d ", fb->format);
+				contentType = "application/octet-stream";
 				break;
 			}
 		}
