@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cassert>
+#include <cmath>
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -166,28 +167,27 @@ int main(int argc, char* argv[])
 
 		for (int32_t x = 0; x < width; x++) {
 			const float u = static_cast<float>(x) / width;
-			chunk_t value = static_cast<chunk_t>(textureForPosition(u, v) * maxValue);
+			chunk_t value = std::lround(textureForPosition(u, v) * maxValue);
 
 			chunk |= value << shift;
 			shift -= bitsPerPixel;
 
-			if (shift == 0) {
-				*chunkPointer++ = chunk;
-
-				shift = firstPixelShift;
-				chunk = 0;
-			}
-			else if (shift < 0) {
+			if (shift < 0) {
 				chunk |= value >> -shift;
 
 				*chunkPointer++ = chunk;
 
 				shift += chunkBits;
-				chunk = value << shift;
+				if (shift != firstPixelShift) /* remaining from previous pixel */ {
+					chunk = value << shift;
+				}
+				else {
+					chunk = 0;
+				}
 			}
 		}
 
-		if (shift != firstPixelShift) /* something reminding */ {
+		if (shift != firstPixelShift) /* remaining */ {
 			*chunkPointer++ = chunk;
 		}
 
