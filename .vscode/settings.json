@@ -63,13 +63,19 @@
 		"stdexcept": "cpp",
 		"streambuf": "cpp",
 		"thread": "cpp",
-		"esp_system.h": "c"
+		"esp_system.h": "c",
+		"iostream": "cpp"
 	},
 	"cSpell.words": [
+		"ALPHABITFIELDS",
 		"APSTA",
 		"authmode",
 		"AUTOUP",
+		"BITMAPFILEHEADER",
+		"BITMAPINFOHEADER",
+		"BITMAPV",
 		"cmpr",
+		"CMYKRLE",
 		"colorbar",
 		"continously",
 		"dataavailable",
@@ -95,6 +101,7 @@
 		"IMREAD",
 		"imshow",
 		"imwrite",
+		"INFOHEADER",
 		"ipcx",
 		"IRAM",
 		"jsmn",

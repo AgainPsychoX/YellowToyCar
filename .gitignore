@@ -9,6 +9,9 @@ private
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 
+# Avoid sharing VS Code tasks as it can be system specific
+.vscode/tasks.json
+
 # Espressif IoT Development Framework (esp-idf) related lock file
 dependencies.lock
 
@@ -17,3 +20,7 @@ src/**/*.gz
 
 # Logs
 logs/
+
+# Other stuff
+*.exe
+other/*.bmp
