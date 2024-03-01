@@ -144,21 +144,21 @@ int main(int argc, char* argv[])
 	// Write pixels data
 	using chunk_t = uint32_t; // at least 32 bits required to ensure alignment
 	constexpr auto chunkBits = sizeof(chunk_t) * 8;
-	const chunk_t maxValue = ~(0xFFFFFFFF << bitsPerPixel);
+	const float scale = std::exp2f(bitsPerPixel);
 	std::vector<uint8_t> rowBuffer(rowLength, 0u);
 	chunk_t* chunkPointer;
 	chunk_t chunk;
 	uint8_t shift;
 	for (int32_t y = 0; y < height; y++) {
-		const float v = static_cast<float>(y) / height;
+		const auto v = static_cast<float>(y) / height;
 		rowBuffer.assign(rowLength, 0u);
 		chunkPointer = reinterpret_cast<chunk_t*>(rowBuffer.data());
 		chunk = 0;
 		shift = 0;
 
 		for (int32_t x = 0; x < width; x++) {
-			const float u = static_cast<float>(x) / width;
-			chunk_t value = std::lround(textureForPosition(u, v) * maxValue);
+			const auto u = static_cast<float>(x) / width;
+			const auto value = static_cast<chunk_t>(textureForPosition(u, v) * scale);
 
 			chunk |= value << shift;
 			shift += bitsPerPixel;
