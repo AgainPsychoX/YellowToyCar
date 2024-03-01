@@ -5,8 +5,11 @@
 #include <fstream>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
 #include "../include/bmp.hpp"
 using namespace bmp;
+
+namespace fs = std::filesystem;
 
 template<class C, typename T>
 bool contains(C&& c, T e) 
@@ -119,7 +122,8 @@ int main(int argc, char* argv[])
 	fileHeader.size = fileHeader.offsetToPixelArray + dibHeader.imageSize;
 
 	// Open the output file
-	std::ofstream output(argc > 1 ? argv[1] : "output.bmp", std::ios::binary);
+	const char* outputPath = argc > 1 ? argv[1] : "output.bmp";
+	std::ofstream output(outputPath, std::ios::binary);
 	if (!output.is_open()) {
 		std::cerr << "Error opening files." << std::endl;
 		return 1;
@@ -144,42 +148,27 @@ int main(int argc, char* argv[])
 	std::vector<uint8_t> rowBuffer(rowLength, 0u);
 	chunk_t* chunkPointer;
 	chunk_t chunk;
-	int8_t shift;
-	const int8_t firstPixelShift = chunkBits - bitsPerPixel;
+	uint8_t shift;
 	for (int32_t y = 0; y < height; y++) {
 		const float v = static_cast<float>(y) / height;
 		rowBuffer.assign(rowLength, 0u);
 		chunkPointer = reinterpret_cast<chunk_t*>(rowBuffer.data());
 		chunk = 0;
-		shift = firstPixelShift;
-
-		/*	Example for 3 bits per pixel, to white, with 32 bits wide chunk:
-			| pos | shift | buffer bytes
-			|   0 |    29 | 00000000 00000000 00000000 00000000, ...
-			|   0 |    26 | 11100000 00000000 00000000 00000000, ...
-			|   0 |    23 | 11111100 00000000 00000000 00000000, ...
-			|   0 |    20 | 11111111 10000000 00000000 00000000, ...
-			| ... | ...   | ... |
-			|   0 |     1 | 11111111 11111111 11111111 11110000, ...
-			|   0 | -2/30 | 11111111 11111111 11111111 11111110, ...
-			|   4 |    27 | 11111111 11111111 11111111 11111111, 11000000 ...
-		*/
+		shift = 0;
 
 		for (int32_t x = 0; x < width; x++) {
 			const float u = static_cast<float>(x) / width;
 			chunk_t value = std::lround(textureForPosition(u, v) * maxValue);
 
 			chunk |= value << shift;
-			shift -= bitsPerPixel;
+			shift += bitsPerPixel;
 
-			if (shift < 0) {
-				chunk |= value >> -shift;
-
+			if (shift >= chunkBits) {
 				*chunkPointer++ = chunk;
 
-				shift += chunkBits;
-				if (shift != firstPixelShift) /* remaining from previous pixel */ {
-					chunk = value << shift;
+				shift -= chunkBits;
+				if (shift != 0) /* remaining from previous pixel */ {
+					chunk = value >> (bitsPerPixel - shift);
 				}
 				else {
 					chunk = 0;
@@ -187,7 +176,7 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		if (shift != firstPixelShift) /* remaining */ {
+		if (shift != 0) /* remaining */ {
 			*chunkPointer++ = chunk;
 		}
 
@@ -195,12 +184,12 @@ int main(int argc, char* argv[])
 		output.write(reinterpret_cast<char*>(rowBuffer.data()), rowLength);
 	}
 
-	std::fprintf(stderr, "End of file @ 0x%04X (length=%u)\n", 
+	std::fprintf(stderr, "End of file @ 0x%04X (total length=%u)\n", 
 		static_cast<int32_t>(output.tellp()), static_cast<int32_t>(output.tellp()));
 	assert(output.tellp() == fileHeader.size);
 
 	// FIXME: crashes (most of the time) on output.close()
 
-	std::cout << "Done." << std::endl;
+	std::cout << "Done, saved at " << fs::absolute(outputPath).generic_string() << std::endl;
 	return 0;
 }
