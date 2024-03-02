@@ -5,6 +5,7 @@
 #include <fstream>
 #include <vector>
 #include <algorithm>
+#include <random>
 #include <filesystem>
 #include "../include/bmp.hpp"
 using namespace bmp;
@@ -30,6 +31,17 @@ inline T paddedToCeil(std::size_t toNumber, T value)
 {
 	return value + paddingToCeil(toNumber, value);
 }
+
+std::default_random_engine randomEngine;
+std::uniform_real_distribution<float> normalFloatDistribution(0, 1);
+
+float generateRandomNormalFloat()
+{
+	return normalFloatDistribution(randomEngine);
+}
+
+// TODO: debug the noise: color difference between neighbour pixels larger than 1 in some cases
+// #define DEBUG_NOISE
 
 constexpr int32_t maxWidth = 1920;
 constexpr int32_t maxHeight = 1080;
@@ -75,6 +87,8 @@ int main(int argc, char* argv[])
 	// TODO: check if color tables are indeed mandatory when 8 bits per pixel
 	bool useColorTable = true; // FIXME: ...
 	//bool useColorTable = bitsPerPixel < 8;
+
+	bool noise = true; // TODO: make it switch
 
 	// Prepare headers
 	BITMAPFILEHEADER fileHeader;
@@ -155,10 +169,31 @@ int main(int argc, char* argv[])
 		chunkPointer = reinterpret_cast<chunk_t*>(rowBuffer.data());
 		chunk = 0;
 		shift = 0;
+#ifdef DEBUG_NOISE
+		chunk_t previous = 0xFF;
+#endif
 
 		for (int32_t x = 0; x < width; x++) {
-			const auto u = static_cast<float>(x) / width;
-			const auto value = static_cast<chunk_t>(textureForPosition(u, v) * scale);
+			chunk_t value;
+			if (noise) {
+				const auto u = static_cast<float>(x) / (width - 1);
+				const auto real = textureForPosition(u, v) * (scale - 1);
+				const auto prev = static_cast<chunk_t>(real);
+				const auto next = prev + 1;
+				value = (real - prev) < generateRandomNormalFloat() ? prev : next;
+#ifdef DEBUG_NOISE
+				// if (y == 0 && ((0 <= x && x <= 10) || (width - 10 <= x && x <= width))) {
+				if (y == 0) {
+					bool weird = std::abs((long long)previous - value) > 1 && !(previous == 0xFF && value == 0x00);
+					std::printf("x=%u u=%.6f r=%.6f p=%u n=%u %%=%.3f v=%u w=%u\n", x, u, real, prev, next, (real - prev), value, weird);
+				}
+				previous = value;
+#endif
+			}
+			else {
+				const auto u = static_cast<float>(x) / width;
+				value = static_cast<chunk_t>(textureForPosition(u, v) * scale);
+			}
 
 			chunk |= value << shift;
 			shift += bitsPerPixel;
@@ -180,6 +215,17 @@ int main(int argc, char* argv[])
 			*chunkPointer++ = chunk;
 		}
 
+#ifdef DEBUG_NOISE
+		if (noise) {
+			for (size_t i = 1; i < rowBuffer.size(); i++) {
+				if (std::abs(rowBuffer[i - 1] - rowBuffer[i]) > 1) {
+					std::fprintf(stderr, "Oops @ 0x%04X -> 0x%0X next to 0x%0X\n", 
+						static_cast<int32_t>(output.tellp()), rowBuffer[i - 1], rowBuffer[i]);
+				}
+			}
+		}
+#endif
+
 		assert(rowBuffer.size() == rowLength);
 		output.write(reinterpret_cast<char*>(rowBuffer.data()), rowLength);
 	}
@@ -187,8 +233,6 @@ int main(int argc, char* argv[])
 	std::fprintf(stderr, "End of file @ 0x%04X (total length=%u)\n", 
 		static_cast<int32_t>(output.tellp()), static_cast<int32_t>(output.tellp()));
 	assert(output.tellp() == fileHeader.size);
-
-	// FIXME: crashes (most of the time) on output.close()
 
 	std::cout << "Done, saved at " << fs::absolute(outputPath).generic_string() << std::endl;
 	return 0;
