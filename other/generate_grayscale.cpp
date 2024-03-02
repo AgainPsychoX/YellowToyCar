@@ -58,7 +58,19 @@ constexpr uint8_t supportedBitsPerPixel[] = { 1, 2, 4, 8, 16, 24, 32 };
 /// Returns grayscale texture value for given normalized position.
 float textureForPosition(float u, float v)
 {
+#ifdef SIMPLE_TEXTURE
 	return u;
+#else
+	bool smallBox = (0.4f < v && v < 0.6f) && (0.4f < u && u < 0.6f);
+	bool largeBox = (0.2f < v && v < 0.8f) && (0.2f < u && u < 0.8f);
+	if (smallBox) {
+		return (v - 0.4f) / 0.2f;
+	}
+	if (largeBox) {
+		return 1 - (u + v - 0.4f) / 1.2f;
+	}
+	return u;
+#endif
 }
 
 int main(int argc, char* argv[])
@@ -85,7 +97,7 @@ int main(int argc, char* argv[])
 	}
 
 	// TODO: check if color tables are indeed mandatory when 8 bits per pixel
-	bool useColorTable = true; // FIXME: ...
+	bool useColorTable = false; // FIXME: ...
 	//bool useColorTable = bitsPerPixel < 8;
 
 	bool noise = true; // TODO: make it switch
