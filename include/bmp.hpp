@@ -43,6 +43,10 @@ struct BITMAPINFOHEADER {
 };
 static_assert(sizeof(BITMAPINFOHEADER) == 40);
 
+/// Warning: Please prefer to use BITMAPV3INFOHEADER as some software expects
+/// alpha mask when BI_BITFIELDS compression/encoding is used. Windows has some 
+/// problem supporting BITMAPV2INFOHEADER: masks can be used (via BI_BITFIELDS),
+/// but header size must be 40.
 struct BITMAPV2INFOHEADER : BITMAPINFOHEADER {
 	BITMAPV2INFOHEADER()
 		: BITMAPINFOHEADER()
@@ -55,6 +59,17 @@ struct BITMAPV2INFOHEADER : BITMAPINFOHEADER {
 	uint32_t blueMask;
 };
 static_assert(sizeof(BITMAPV2INFOHEADER) == 52);
+
+struct BITMAPV3INFOHEADER : BITMAPV2INFOHEADER {
+	BITMAPV3INFOHEADER()
+		: BITMAPV2INFOHEADER()
+	{
+		headerSize = 56;
+	}
+
+	uint32_t alphaMask;
+};
+static_assert(sizeof(BITMAPV3INFOHEADER) == 56);
 
 struct ColorTableEntry
 {

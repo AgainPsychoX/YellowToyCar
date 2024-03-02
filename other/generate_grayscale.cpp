@@ -43,9 +43,9 @@ float generateRandomNormalFloat()
 // TODO: debug the noise: color difference between neighbour pixels larger than 1 in some cases
 // #define DEBUG_NOISE
 
-constexpr int32_t maxWidth = 1920;
-constexpr int32_t maxHeight = 1080;
-constexpr uint8_t supportedBitsPerPixel[] = { 1, 2, 4, 8, 16, 24, 32 };
+// #define SIMPLE_TEXTURE
+
+// #define BITMAP_HEADER_V3
 
 // For grayscale bitmaps (with 8 bpp color depth), there seem to be 2 methods:
 // + using color table (only for <= 8 bpp, require color table)
@@ -54,6 +54,20 @@ constexpr uint8_t supportedBitsPerPixel[] = { 1, 2, 4, 8, 16, 24, 32 };
 
 // Note for debugging:
 // + ImageMagick `identify -verbose output.bmp` is very useful.
+// Also by the way, here is ImageMagick BMP codec:
+// https://github.com/ImageMagick/ImageMagick/blob/e287a71bfb1c1d5ce467525bc08b5ed6e0d80503/coders/bmp.c
+
+constexpr int32_t maxWidth = 1920;
+constexpr int32_t maxHeight = 1080;
+constexpr uint8_t supportedBitsPerPixel[] = {
+	1,  // Works.
+	2,  // Works.
+	4,  // Works.
+	8,  // Color table is still mandatory, works nicely everywhere.
+	16, // Works in Windows, Paint, but doesn't work in Chrome or VS Code (looks weird)
+	24, // Looks weird in Windows & Paint, doesn't work anywhere else.
+	32, // Doesn't work anywhere.
+};
 
 /// Returns grayscale texture value for given normalized position.
 float textureForPosition(float u, float v)
@@ -96,16 +110,20 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	// TODO: check if color tables are indeed mandatory when 8 bits per pixel
-	bool useColorTable = false; // FIXME: ...
-	//bool useColorTable = bitsPerPixel < 8;
+	// Sadly, it seems color table is required for 8 bits per pixel and less
+	bool useColorTable = bitsPerPixel <= 8; 
+	// bool useColorTable = false;
 
 	bool noise = true; // TODO: make it switch
 
 	// Prepare headers
 	BITMAPFILEHEADER fileHeader;
 	fileHeader.reserved1 = fileHeader.reserved2 = 0x4141;
+#ifdef BITMAP_HEADER_V3
+	BITMAPV3INFOHEADER dibHeader;
+#else
 	BITMAPV2INFOHEADER dibHeader;
+#endif
 	dibHeader.width = width;
 	dibHeader.height = height;
 	dibHeader.bitsPerPixel = bitsPerPixel;
@@ -132,17 +150,22 @@ int main(int argc, char* argv[])
 		dibHeader.compression = BI_BITFIELDS; // signal RGB masks should be used
 		dibHeader.redMask   = \
 		dibHeader.greenMask = \
-		dibHeader.blueMask  = ~(0xFFFFFFFF << bitsPerPixel);
+		dibHeader.blueMask  = ~(0xFFFFFFFFLU << bitsPerPixel);
+		// dibHeader.alphaMask = 0;
 	}
 
+#ifdef BITMAP_HEADER_V3
+	size_t dibHeaderRealSize = dibHeader.headerSize;
+	assert(dibHeaderRealSize == sizeof(BITMAPV3INFOHEADER));
+#else
 	// Despite header being in fact 52, it needs to be 40 for Windows to understand it
 	size_t dibHeaderRealSize = dibHeader.headerSize;
 	dibHeader.headerSize = sizeof(BITMAPINFOHEADER);
+#endif
 
 	// Calculate sizes, offsets, lengths
-	assert(bitsPerPixel % 8 == 0);
-	const uint8_t bytesPerPixel = bitsPerPixel / 8;
-	const size_t rowLength = paddedToCeil(4, width * bytesPerPixel);
+	const float bytesPerPixel = static_cast<float>(bitsPerPixel) / 8;
+	const size_t rowLength = paddedToCeil(4, static_cast<size_t>(std::ceil(width * bytesPerPixel)));
 	dibHeader.imageSize = rowLength * std::abs(height); 
 	fileHeader.offsetToPixelArray = sizeof(fileHeader) + dibHeaderRealSize + colorTableBytesSize;
 	fileHeader.size = fileHeader.offsetToPixelArray + dibHeader.imageSize;
