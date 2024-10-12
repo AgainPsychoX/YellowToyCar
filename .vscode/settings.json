@@ -1,9 +1,11 @@
 {
 	"editor.indentSize": "tabSize",
 	"editor.tabSize": 4,
+
 	"files.associations": {
 		"*.log": "vt100",
 		"*.mod": "plaintext",
+		"*.ahk": "ahk",
 		"*.mcfunction": "ignore",
 		"Kconfig": "shellscript",
 		"Kconfig.projbuild": "shellscript",
@@ -64,7 +66,11 @@
 		"streambuf": "cpp",
 		"thread": "cpp",
 		"esp_system.h": "c",
-		"iostream": "cpp"
+		"iostream": "cpp",
+		"i2c_types.h": "c",
+		"esp_log.h": "c",
+		"i2c_master.h": "c",
+		"stdbool.h": "c"
 	},
 	"cSpell.words": [
 		"ALPHABITFIELDS",
@@ -111,6 +117,7 @@
 		"lastptr",
 		"ledc",
 		"lenc",
+		"libdeps",
 		"LOGD",
 		"LOGI",
 		"LOGV",
@@ -134,12 +141,14 @@
 		"QXGA",
 		"rssi",
 		"sccb",
+		"sdkconfig",
 		"setoperatingmode",
 		"setservername",
 		"SIOD",
 		"SNTP",
 		"SOFTAP",
 		"SRAM",
+		"SRCS",
 		"SSID",
 		"STACONNECTED",
 		"stadisconnect",
@@ -160,7 +169,15 @@
 		"WROVER",
 		"XCLK"
 	],
+
+	// Hide `.pio/` folder
 	"files.exclude": {
 		"**/.pio": true
-	}
+	},
+
+	// Fix to make `pio run -t menuconfig` work properly
+	"terminal.integrated.windowsEnableConpty": false,
+
+	// Hide Git submodules (used as dependencies, in `libs/` folder)
+	"git.detectSubmodules": false
 }

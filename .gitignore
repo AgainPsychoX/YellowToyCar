@@ -12,6 +12,9 @@ private
 # Avoid sharing VS Code tasks as it can be system specific
 .vscode/tasks.json
 
+# Espressif IoT Development Framework (esp-idf) managed components
+managed_components/
+
 # Espressif IoT Development Framework (esp-idf) related lock file
 dependencies.lock
 
@@ -21,6 +24,10 @@ src/**/*.gz
 # Logs
 logs/
 
+# To run scripts
+.venv/
+
 # Other stuff
 *.exe
 other/*.bmp
+

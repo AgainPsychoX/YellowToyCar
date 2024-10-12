@@ -1,10 +1,13 @@
 #include <sdkconfig.h>
+#include <limits>
 #include <ctime>
 #include <cstring>
 #include <cstdio>
 #include <string_view>
+#include <memory>
 #include <esp_log.h>
 #include <esp_wifi.h>
+#include <esp_mac.h>
 #include <freertos/timers.h>
 #include <esp_http_server.h>
 #include <jsmn.h>
@@ -32,7 +35,6 @@ inline esp_err_t httpd_register_uri_handler(httpd_handle_t handle, const httpd_u
 	return httpd_register_uri_handler(handle, &uri_handler);
 }
 
-// Note: Additional `src_` prefix is necessary because of PlatformIO, see README' Known issues section.
 #define GENERATE_HTTPD_HANDLER_FOR_EMBEDDED_FILE_I(n, t, e)                    \
 	esp_err_t embedded_##n##_handler(httpd_req_t* req)                         \
 	{                                                                          \
@@ -222,7 +224,7 @@ esp_err_t config_root(
 								}
 							);
 							xTimerStart(fallbackReconnectTimer, portMAX_DELAY);
-							ESP_LOGD(TAG_CONFIG_ROOT, "Timer set to restart in %ums", delay);
+							ESP_LOGD(TAG_CONFIG_ROOT, "Timer set to restart in %" PRIu32 "ms", delay);
 						}
 						break;
 					}
@@ -350,10 +352,10 @@ esp_err_t status_handler(httpd_req_t* req)
 		ret = std::snprintf(
 			position, remaining,
 			"{"
-				"\"uptime\":%llu,"
+				"\"uptime\":%" PRIi64 ","
 				"\"time\":\"%s\","
-				"\"freeHeap\":%u,"
-				"\"minFreeHeap\":%u,"
+				"\"freeHeap\":%" PRIu32 ","
+				"\"minFreeHeap\":%" PRIu32 ","
 				"\"rssi\":%d,"
 				"\"stations\":[",
 			esp_timer_get_time(),
@@ -390,7 +392,7 @@ esp_err_t status_handler(httpd_req_t* req)
 		ret = std::snprintf(
 			buffer, bufferLength,
 			"{"
-				"\"uptime\":%llu,"
+				"\"uptime\":%" PRIi64 ","
 				"\"time\":\"%s\","
 				"\"rssi\":%d"
 			"}",

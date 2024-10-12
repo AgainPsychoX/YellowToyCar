@@ -144,7 +144,7 @@ void handle_sta_disconnected(void* arg, esp_event_base_t event_base, int32_t eve
 		nextReconnectTimestamp = std::max<uptime_t>(nextReconnectTimestamp, now + delay);
 
 		delay = (nextReconnectTimestamp - now) / 1000; // ms
-		ESP_LOGV(TAG_FALLBACK, "Next reconnect attempt in %ums", static_cast<uint32_t>(delay));
+		ESP_LOGV(TAG_FALLBACK, "Next reconnect attempt in %" PRIu64 "ms", delay);
 		if (unlikely(xTimerReset(fallbackReconnectTimer, 0) == pdFAIL)) {
 			ESP_LOGW(TAG_FALLBACK, "Failed to reset timer for delayed reconnect");
 		}
@@ -702,7 +702,7 @@ esp_err_t config(
 				"}"
 			"}",
 			wifi_mode_to_cstr(mode),
-			static_cast<uint32_t>(fallbackTimeout / 1000),
+			static_cast<unsigned int>(fallbackTimeout / 1000),
 			/* network.sta */
 			sta_config.ssid,
 			sta_config.password,

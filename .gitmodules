@@ -1,0 +1,3 @@
+[submodule "libs/constexpr-to-string"]
+	path = libs/constexpr-to-string
+	url = https://github.com/tcsullivan/constexpr-to-string.git

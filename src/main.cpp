@@ -29,9 +29,9 @@ namespace app::http { // from http.cpp
 namespace app::time {
 	inline void init()
 	{
-		sntp_setoperatingmode(SNTP_OPMODE_POLL);
-		sntp_setservername(0, "pl.pool.ntp.org");
-		sntp_init();
+		esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+		esp_sntp_setservername(0, "pl.pool.ntp.org");
+		esp_sntp_init();
 
 		// TODO: allow changing NTP server & timezone
 		setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1); // Hardcoded for Europe/Warsaw
