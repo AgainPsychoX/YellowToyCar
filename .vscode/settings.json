@@ -170,9 +170,13 @@
 		"XCLK"
 	],
 
-	// Hide `.pio/` folder
-	"files.exclude": {
-		"**/.pio": true
+	// Avoid VS Code file explorer expanding on some folders
+	"explorer.autoRevealExclude": {
+		"**/.venv": true,
+		"**/.pio": true,
+		"**/managed_components": true,
+		"**/libs": true,
+		"**/logs": true,
 	},
 
 	// Fix to make `pio run -t menuconfig` work properly
