@@ -1,4 +1,5 @@
 import os
+import shutil
 import argparse
 from benedict import benedict
 from time import time, strftime
@@ -47,15 +48,16 @@ def generate_frame_filename_for_saving(index):
 ################################################################################
 
 def handle_mjpeg_stream(args, config):
-	# Some code adapter from https://stackoverflow.com/questions/21702477/how-to-parse-mjpeg-http-stream-from-ip-camera
+	# Some code adapted from https://stackoverflow.com/questions/21702477/how-to-parse-mjpeg-http-stream-from-ip-camera
 	# Other solution like `cv2.VideoCapture(stream_url)` couldn't be used, as it fails to work here.
 	start = time()
 	total_frames = 0
 	saved_frames = 0
-	request = requests.get(f'http://{args.ip}:81/stream', stream=True)
-	if request.status_code == 200:
+	total_bytes = 0
+	response = requests.get(f'http://{args.ip}:81/stream', stream=True)
+	if response.status_code == 200:
 		buffer = bytes()
-		for chunk in request.iter_content(chunk_size=4096):
+		for chunk in response.iter_content(chunk_size=4096):
 			buffer += chunk
 			a = buffer.find(JPEG_SOI_MARKER)
 			if a == -1:
@@ -72,7 +74,8 @@ def handle_mjpeg_stream(args, config):
 			total_frames += 1
 			from_start = time() - start
 			fps = total_frames / from_start
-			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps}')
+			total_bytes += len(chunk)
+			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB/s: {total_bytes / from_start / 1024:.3f}')
 
 			if args.save:
 				saved_fps = saved_frames / from_start
@@ -85,12 +88,12 @@ def handle_mjpeg_stream(args, config):
 			if check_window_is_closed(window_name) or esc_or_q_pressed:
 				break
 	else:
-		print(f'Error: Received unexpected status code {request.status_code}')
+		print(f'Error: Received unexpected status code {response.status_code}')
 
 def handle_jpeg_frame(args, config):
-	request = requests.get(f'http://{args.ip}/capture')
-	if request.status_code == 200:
-		image = cv2.imdecode(np.frombuffer(request.content, dtype=np.uint8), cv2.IMREAD_COLOR)
+	response = requests.get(f'http://{args.ip}/capture')
+	if response.status_code == 200:
+		image = cv2.imdecode(np.frombuffer(response.content, dtype=np.uint8), cv2.IMREAD_COLOR)
 		cv2.imshow(window_name, image)
 
 		if args.save:
@@ -101,7 +104,7 @@ def handle_jpeg_frame(args, config):
 			if check_window_is_closed(window_name) or esc_or_q_pressed:
 				break
 	else:
-		print(f'Error: Received unexpected status code {request.status_code}')
+		print(f'Error: Received unexpected status code {response.status_code}')
 
 ################################################################################
 
@@ -114,9 +117,11 @@ def handle_grayscale_stream(args, config):
 	start = time()
 	total_frames = 0
 	saved_frames = 0
-	request = requests.get(f'http://{args.ip}:81/stream', stream=True)
-	if request.status_code == 200:
-		for chunk in request.iter_content(chunk_size=chunk_size):
+	total_bytes = 0
+	response = requests.get(f'http://{args.ip}:81/stream', stream=True)
+	if response.status_code == 200:
+		for chunk in response.iter_content(chunk_size=chunk_size):
+			# Discard stream part & boundary markers
 			if len(chunk) != chunk_size:
 				continue
 
@@ -126,37 +131,41 @@ def handle_grayscale_stream(args, config):
 			total_frames += 1
 			from_start = time() - start
 			fps = total_frames / from_start
-			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps}')
+			total_bytes += len(chunk)
+			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB/s: {total_bytes / from_start / 1024:.3f}')
 
 			if args.save:
 				saved_fps = saved_frames / from_start
 				if not args.save_fps or saved_fps < args.save_fps:
-					filename = generate_frame_filename_for_saving(total_frames) + '.bmp'
-					cv2.imwrite(os.path.join(args.save, filename), image)
+					filename = generate_frame_filename_for_saving(total_frames) + '.bin'
+					with open(os.path.join(args.save, filename), 'wb') as file:
+						file.write(chunk)
 					saved_frames += 1
 
 			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
 			if check_window_is_closed(window_name) or esc_or_q_pressed:
 				break
 	else:
-		print(f'Error: Received unexpected status code {request.status_code}')
+		print(f'Error: Received unexpected status code {response.status_code}')
 
 def handle_grayscale_frame(args, config):
 	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
-	request = requests.get(f'http://{args.ip}/capture')
-	if request.status_code == 200:
-		image = np.frombuffer(request.content, np.uint8).reshape(height, width)
+	response = requests.get(f'http://{args.ip}/capture')
+	if response.status_code == 200:
+		image = np.frombuffer(response.content, np.uint8).reshape(height, width)
 		cv2.imshow(window_name, image)
 
 		if args.save:
-			cv2.imwrite(args.save, image)
+			with open(args.save, 'wb') as file:
+				file.write(response.content)
+				print(f'Raw frame saved to {args.save}')
 
 		while True:
 			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
 			if check_window_is_closed(window_name) or esc_or_q_pressed:
 				break
 	else:
-		print(f'Error: Received unexpected status code {request.status_code}')
+		print(f'Error: Received unexpected status code {response.status_code}')
 
 ################################################################################
 
@@ -176,22 +185,33 @@ def main():
 	parser.add_argument('--frame', help='If set, only retrieves single frame.', required=False, action='store_true')
 	parser.add_argument('--save', metavar='PATH', help='If set, specifies path to file (or folder) for the frame (or stream) to be saved.', required=False)
 	parser.add_argument('--save-fps', metavar='FPS', help='If set, limits number of frames being saved.', required=False, type=fps_type)
+	parser.add_argument('--overwrite', help='Allow overwriting existing files (warning: might remove files!)', required=False, action='store_true')
 	args = parser.parse_args()
 
 	if args.save:
 		args.save = os.path.normpath(args.save)
 		if args.frame:
-			if os.path.exists(args.save):
+			if not args.overwrite and os.path.exists(args.save):
 				print('Error: File exists on specified path, cannot save.')
 				return
 		else:
+			# TODO: overwrite for streaming?
 			if os.path.isfile(args.save):
-				print('Error: File exists on specified path, cannot save.')
-				return
+				if args.overwrite:
+					print(f'Overwriting existing file: {args.save}')
+					os.remove(args.save)
+				else:
+					print('Error: File exists on specified path, cannot save.')
+					return
 			os.makedirs(args.save, exist_ok=True)
 			if len(os.listdir(args.save)) != 0:
-				print('Error: Directory is not empty')
-				return
+				if args.overwrite:
+					print(f'Removing existing directory: {args.save}')
+					shutil.rmtree(args.save)
+					os.makedirs(args.save, exist_ok=True)
+				else:
+					print('Error: Directory is not empty')
+					return
 
 	if args.config_file:
 		config = benedict(args.config_file, format='json')

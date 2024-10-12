@@ -177,6 +177,7 @@
 		"**/managed_components": true,
 		"**/libs": true,
 		"**/logs": true,
+		"**/private/capture": true
 	},
 
 	// Fix to make `pio run -t menuconfig` work properly

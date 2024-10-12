@@ -489,6 +489,12 @@ esp_err_t capture_handler(httpd_req_t* req)
 	ESP_LOGI(TAG_HTTPD_MAIN, "Frame captured. Time: %llu us. Length: %u", end - start, fb->len);
 
 	switch (fb->format) {
+		case PIXFORMAT_GRAYSCALE: {
+			httpd_resp_set_type(req, "application/octet-stream");
+			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.bin");
+			httpd_resp_send(req, (const char*)fb->buf, fb->len);
+			return ESP_OK;
+		}
 		case PIXFORMAT_JPEG: {
 			httpd_resp_set_type(req, "image/jpeg");
 			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
