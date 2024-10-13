@@ -75,6 +75,7 @@
 	"cSpell.words": [
 		"ALPHABITFIELDS",
 		"APSTA",
+		"astype",
 		"authmode",
 		"AUTOUP",
 		"BITMAPFILEHEADER",
@@ -90,6 +91,7 @@
 		"dhcpc",
 		"dhcps",
 		"Digi",
+		"dstack",
 		"dtype",
 		"Espressif",
 		"fourcc",

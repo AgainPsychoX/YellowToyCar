@@ -11,6 +11,8 @@ window_name = 'YellowToyCar Stream'
 
 DEFAULT_IP = '192.168.4.1' # default for ESP32 esp-idf
 
+PIXFORMAT_RGB565    = 0
+PIXFORMAT_YUV422    = 1
 PIXFORMAT_GRAYSCALE = 3
 PIXFORMAT_JPEG      = 4
 
@@ -108,11 +110,34 @@ def handle_jpeg_frame(args, config):
 
 ################################################################################
 
-def handle_grayscale_stream(args, config):
+def decode_static_size_frame(data, width, height, pixformat):
+	if pixformat == PIXFORMAT_GRAYSCALE:
+		return np.frombuffer(data, np.uint8).reshape(height, width)
+	elif pixformat == PIXFORMAT_YUV422:
+		# TODO: implement YUV422 decoding
+		r = np.ones([height, width]) * 123
+		g = np.ones([height, width]) * 123
+		b = np.ones([height, width]) * 123
+		return np.dstack((b, g, r)).astype(np.uint8)
+	elif pixformat == PIXFORMAT_RGB565:
+		image = np.frombuffer(data, dtype='>u2').reshape(height, width)
+		# Decode from RGB565 to 8 bit R, G & B
+		r = ((image & 0b1111100000000000) >> 11) * 255 // 0b011111
+		g = ((image & 0b0000011111100000) >>  5) * 255 // 0b111111
+		b = ((image & 0b0000000000011111) >>  0) * 255 // 0b011111
+		# Repack as BGR888
+		return np.dstack((b, g, r)).astype(np.uint8)
+
+def handle_static_size_stream(args, config, pixformat):
 	# TODO: This doesn't support changing framesize during the stream;
 	#	It would require server to include width & height before the pixels data
 	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
-	chunk_size = width * height
+	if pixformat == PIXFORMAT_RGB565:
+		chunk_size = width * height * 2
+	elif pixformat == PIXFORMAT_YUV422 or pixformat == PIXFORMAT_GRAYSCALE:
+		chunk_size = width * height
+	else:
+		raise ValueError(f'Error: Unsupported pixformat={pixformat}')
 
 	start = time()
 	total_frames = 0
@@ -125,8 +150,7 @@ def handle_grayscale_stream(args, config):
 			if len(chunk) != chunk_size:
 				continue
 
-			image = np.frombuffer(chunk, np.uint8).reshape(height, width)
-			cv2.imshow(window_name, image)
+			cv2.imshow(window_name, decode_static_size_frame(chunk, width, height, pixformat))
 
 			total_frames += 1
 			from_start = time() - start
@@ -148,12 +172,11 @@ def handle_grayscale_stream(args, config):
 	else:
 		print(f'Error: Received unexpected status code {response.status_code}')
 
-def handle_grayscale_frame(args, config):
+def handle_static_size_frame(args, config, pixformat):
 	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
 	response = requests.get(f'http://{args.ip}/capture')
 	if response.status_code == 200:
-		image = np.frombuffer(response.content, np.uint8).reshape(height, width)
-		cv2.imshow(window_name, image)
+		cv2.imshow(window_name, decode_static_size_frame(response.content, width, height, pixformat))
 
 		if args.save:
 			with open(args.save, 'wb') as file:
@@ -182,6 +205,7 @@ def main():
 	parser = argparse.ArgumentParser(description='''This script allows to retrieve camera frames from the car.''')
 	parser.add_argument('--config-file', metavar='PATH', help='JSON file to be used as config. If not provided, will be fetched from the device.', required=False)
 	parser.add_argument('--ip', '--address', help=f'IP of the device. Defaults to the one from the config file or {DEFAULT_IP}.', required=False)
+	parser.add_argument('--stream', help=argparse.SUPPRESS, required=False, action='store_true') # allow '--stream' just because I want to
 	parser.add_argument('--frame', help='If set, only retrieves single frame.', required=False, action='store_true')
 	parser.add_argument('--save', metavar='PATH', help='If set, specifies path to file (or folder) for the frame (or stream) to be saved.', required=False)
 	parser.add_argument('--save-fps', metavar='FPS', help='If set, limits number of frames being saved.', required=False, type=fps_type)
@@ -236,17 +260,13 @@ def main():
 	if args.frame:
 		if pixformat == PIXFORMAT_JPEG:
 			handle_jpeg_frame(args, config)
-		elif pixformat == PIXFORMAT_GRAYSCALE:
-			handle_grayscale_frame(args, config)
 		else:
-			print('Unsupported pixel format')
+			handle_static_size_frame(args, config, pixformat)
 	else: # stream
 		if pixformat == PIXFORMAT_JPEG:
 			handle_mjpeg_stream(args, config)
-		elif pixformat == PIXFORMAT_GRAYSCALE:
-			handle_grayscale_stream(args, config)
 		else:
-			print('Unsupported pixel format')
+			handle_static_size_stream(args, config, pixformat)
 
 if __name__ == '__main__':
 	main()
