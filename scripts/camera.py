@@ -114,17 +114,40 @@ def decode_static_size_frame(data, width, height, pixformat):
 	if pixformat == PIXFORMAT_GRAYSCALE:
 		return np.frombuffer(data, np.uint8).reshape(height, width)
 	elif pixformat == PIXFORMAT_YUV422:
-		# TODO: implement YUV422 decoding
-		r = np.ones([height, width]) * 123
-		g = np.ones([height, width]) * 123
-		b = np.ones([height, width]) * 123
-		return np.dstack((b, g, r)).astype(np.uint8)
+		# Read as YUV bytes
+		yuv = np.frombuffer(data, dtype=np.uint8)
+		y0 = yuv[0::4].astype(np.float32)
+		u  = yuv[1::4].astype(np.float32) - 128
+		y1 = yuv[2::4].astype(np.float32)
+		v  = yuv[3::4].astype(np.float32) - 128
+		# Convert to RGB
+		r0 = y0 + 1.402 * v
+		g0 = y0 - 0.344136 * u - 0.714136 * v
+		b0 = y0 + 1.772 * u
+		r1 = y1 + 1.402 * v
+		g1 = y1 - 0.344136 * u - 0.714136 * v
+		b1 = y1 + 1.772 * u
+		# Interleave and reshape
+		r = np.empty((r0.size + r1.size,), dtype=np.uint8)
+		g = np.empty((g0.size + g1.size,), dtype=np.uint8)
+		b = np.empty((b0.size + b1.size,), dtype=np.uint8)
+		r[0::2] = np.clip(r0, 0, 255)
+		r[1::2] = np.clip(r1, 0, 255)
+		g[0::2] = np.clip(g0, 0, 255)
+		g[1::2] = np.clip(g1, 0, 255)
+		b[0::2] = np.clip(b0, 0, 255)
+		b[1::2] = np.clip(b1, 0, 255)
+		r = r.reshape((height, width))
+		g = g.reshape((height, width))
+		b = b.reshape((height, width))
+		# Repack as BGR888
+		return np.dstack((r, g, b)) #.astype(np.uint8)
 	elif pixformat == PIXFORMAT_RGB565:
-		image = np.frombuffer(data, dtype='>u2').reshape(height, width)
+		rgb = np.frombuffer(data, dtype='>u2').reshape(height, width)
 		# Decode from RGB565 to 8 bit R, G & B
-		r = ((image & 0b1111100000000000) >> 11) * 255 // 0b011111
-		g = ((image & 0b0000011111100000) >>  5) * 255 // 0b111111
-		b = ((image & 0b0000000000011111) >>  0) * 255 // 0b011111
+		r = ((rgb & 0b1111100000000000) >> 11) * 255 // 0b011111
+		g = ((rgb & 0b0000011111100000) >>  5) * 255 // 0b111111
+		b = ((rgb & 0b0000000000011111) >>  0) * 255 // 0b011111
 		# Repack as BGR888
 		return np.dstack((b, g, r)).astype(np.uint8)
 
@@ -132,9 +155,9 @@ def handle_static_size_stream(args, config, pixformat):
 	# TODO: This doesn't support changing framesize during the stream;
 	#	It would require server to include width & height before the pixels data
 	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
-	if pixformat == PIXFORMAT_RGB565:
+	if pixformat == PIXFORMAT_RGB565 or pixformat == PIXFORMAT_YUV422:
 		chunk_size = width * height * 2
-	elif pixformat == PIXFORMAT_YUV422 or pixformat == PIXFORMAT_GRAYSCALE:
+	elif pixformat == PIXFORMAT_GRAYSCALE:
 		chunk_size = width * height
 	else:
 		raise ValueError(f'Error: Unsupported pixformat={pixformat}')
