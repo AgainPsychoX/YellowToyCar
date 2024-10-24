@@ -413,6 +413,10 @@ Controls:
 ### To-do
 
 + Add remaining controls for HTTP endpoint
++ After updating to ESP-IDF 5.X:
+	+ [Update to new motors/PWM driver](https://docs.espressif.com/projects/esp-idf/en/v5.0.7/esp32/migration-guides/release-5.x/peripherals.html#mcpwm), currently there are warnings about it (deprecation) when building.
++ Use more C++ stuff instead C:
+	+ `string_view`s, like in config/JSON related code. Recently had issue with `strlen` being unsafe...
 + Detailed status output, including debug stuff
 	+ Process list and stats.
 	+ Memory heap usage & fragmentation.

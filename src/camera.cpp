@@ -242,7 +242,13 @@ esp_err_t config(
 ) {
 	sensor_t* sensor = esp_camera_sensor_get();
 	if (unlikely(!sensor)) {
-		ESP_LOGE(TAG_CONFIG_CAMERA, "Failed to get camera handle to set config");
+		if (output_return) {
+			output[0] = '{';
+			output[1] = '}';
+			output[2] = 0;
+			*output_return = 2;
+		}
+		ESP_LOGE(TAG_CONFIG_CAMERA, "Failed to get camera handle to access config");
 		return ESP_FAIL;
 	}
 

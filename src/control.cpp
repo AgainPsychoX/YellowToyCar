@@ -19,8 +19,9 @@ void init()
 	setOtherLight(false);
 }
 
-uptime_t lastControlTime = 0;
-uptime_t controlTimeout = 2'000'000; // us
+constexpr uptime_t initialControlTimeout = 2'000'000; // us
+uptime_t lastControlTime = -initialControlTimeout; // us (negative to make initial state valid as not yet controlled)
+uptime_t controlTimeout = initialControlTimeout; // us
 
 uptime_t mainLightControlTimeout = 30'000'000; // us
 

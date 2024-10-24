@@ -216,14 +216,14 @@ esp_err_t config_root(
 						uint32_t delay = std::atoi(input + value_token->start);
 						if (delay || parseBooleanFast(input + value_token->start)) {
 							if (delay < 100) delay = 100;
-							const auto fallbackReconnectTimer = xTimerCreate(
+							const auto restartTimer = xTimerCreate(
 								"restart", delay / portTICK_PERIOD_MS, pdFALSE, static_cast<void*>(0), 
 								[] (TimerHandle_t) {
 									ESP_LOGI(TAG_CONFIG_ROOT, "Restarting...");
 									esp_restart();
 								}
 							);
-							xTimerStart(fallbackReconnectTimer, portMAX_DELAY);
+							xTimerStart(restartTimer, portMAX_DELAY);
 							ESP_LOGD(TAG_CONFIG_ROOT, "Timer set to restart in %" PRIu32 "ms", delay);
 						}
 						break;

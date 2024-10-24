@@ -2,9 +2,12 @@
 #include <sdkconfig.h>
 #include <string_view>
 #include <utility>
+#include <limits>
+#include <type_traits>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <esp_timer.h>
 
 ////////////////////////////////////////////////////////////////////////////////
 // Error handling
@@ -242,3 +245,8 @@ hton(T value) noexcept
 	/***/ | ((value & 0x000000000000FF00ull) << 40)
 	/***/ | ((value & 0x00000000000000FFull) << 56);
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tools
+
+void dumpMemoryToLog(const char* tag, const void* pointer, size_t length);

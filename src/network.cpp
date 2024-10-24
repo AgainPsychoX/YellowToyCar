@@ -9,8 +9,13 @@
 #include <jsmn.h>
 #include "utils.hpp"
 
+#define FORCE_WIFI_DEFAULTS 0
+
 #ifndef FORCE_DUMP_NETWORK_CONFIG
 #	define FORCE_DUMP_NETWORK_CONFIG 0
+#endif
+#ifndef FORCE_WIFI_DEFAULTS
+#	define FORCE_WIFI_DEFAULTS 0
 #endif
 
 namespace app::control { // from control.cpp
@@ -81,105 +86,121 @@ inline esp_err_t save_wifi_mode_to_nvs(nvs::NVSHandle& nvs_handle, wifi_mode_t m
 
 static const char* TAG_FALLBACK = "ap-fallback";
 
+constexpr uptime_t reconnectMinimalDelay = 100'000;
 constexpr uptime_t reconnectDelayWhenNoStations = 5'000'000;  // Delay, in microseconds, necessary to allow new stations to connect properly.
-constexpr bool reconnectWhenStationsConnected = true; // Whenever we want want to try reconnect even while there are stations connected.
 constexpr uptime_t reconnectDelayWhenStationsConnected = 60'000'000; // Delay, in microseconds, for reconnect attempts when there are stations connected.
+constexpr bool reconnectWhenStationsConnected = true; // Whenever we want want to try reconnect even while there are stations connected.
+constexpr bool reconnectWhenBeingControlled = false;
 
 uptime_t fallbackTimeout = 10'000'000;  // Microseconds after which we start AP if we can't connect with STA. Configurable by config.
-uptime_t disconnectedTimestamp = 0;     // Timestamp when our device (station) lost connection to AP, or 0 if connected. 
+uptime_t disconnectedTimestamp = 0;     // Timestamp when our device (station) lost connection to AP, or 0 if connected, or in AP only mode.
 uptime_t nextReconnectTimestamp;        // Timestamp for next reconnect attempt, only valid when `disconnectedTimestamp` is not 0.
 
-TimerHandle_t fallbackReconnectTimer = nullptr;
+TimerHandle_t reconnectTimer = nullptr;
 
-bool possiblyReconnectAsStationOrDelay()
+void scheduleDelayedReconnectAsStation();
+
+esp_err_t connectAsStation()
 {
-	ESP_LOGV(TAG_FALLBACK, "About to possibly reconnect");
-	if (!disconnectedTimestamp) return false;
-
-	// TODO: instead of restarting, use contorl lost event?
 	const auto now = esp_timer_get_time();
-	if (now - control::lastControlTime < control::controlTimeout) {
-		if (unlikely(xTimerReset(fallbackReconnectTimer, 0) == pdFAIL)) {
-			ESP_LOGW(TAG_FALLBACK, "Failed to reset timer for delayed reconnect");
-			// TODO: rethink error handling for very unlikely stuff 
+	const bool isControlled = now - control::lastControlTime < control::controlTimeout;
+	if (!isControlled || reconnectWhenBeingControlled) {
+		if (isControlled && reconnectWhenBeingControlled) {
+			ESP_LOGW(TAG_FALLBACK, "Connecting while still being controlled");
 		}
-		xTimerChangePeriod(fallbackReconnectTimer, control::controlTimeout / 1000 / portTICK_PERIOD_MS, 0);
-		return false;
+		else {
+			ESP_LOGD(TAG_FALLBACK, "Connecting");
+		}
+		esp_err_t err = ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
+		if (err != ESP_OK) {
+			scheduleDelayedReconnectAsStation();
+		}
+		return err;
 	}
-
-	ESP_LOGV(TAG_FALLBACK, "Reconnecting...");
-	esp_wifi_connect();
-	return true;
+	ESP_LOGD(TAG_FALLBACK, "Cannot try connecting right now, delaying");
+	scheduleDelayedReconnectAsStation();
+	return ESP_ERR_INVALID_STATE;
 }
 
-void handle_sta_disconnected(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+void scheduleDelayedReconnectAsStation(TickType_t ticks)
 {
-	if (!disconnectedTimestamp) {
-		ESP_LOGD(TAG_FALLBACK, "Disconnected!");
-		disconnectedTimestamp = esp_timer_get_time();
-	}
+	xTimerReset(reconnectTimer, 0);
+	xTimerChangePeriod(reconnectTimer, ticks, 0);
+	// TODO: rethink error handling for very unlikely stuff, maybe ASSERT & ASSERT_WITHOUT_ABORT
+}
+
+void scheduleDelayedReconnectAsStation()
+{
+	xTimerStop(reconnectTimer, 0);
 
 	wifi_mode_t mode;
 	esp_wifi_get_mode(&mode);
-	if (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) {
-		const auto now = esp_timer_get_time();
-		uint64_t delay = reconnectDelayWhenNoStations; // us
-
+	if (mode == WIFI_MODE_APSTA) {
 		wifi_sta_list_t sta_list;
 		if (esp_err_t err = esp_wifi_ap_get_sta_list(&sta_list); err != ESP_OK) {
 			ESP_ERROR_CHECK_WITHOUT_ABORT(err);
 			sta_list.num = 0;
 		}
-		ESP_LOGV(TAG_FALLBACK, "Stations count: %u", sta_list.num);
 		if (sta_list.num > 0) {
 			if (reconnectWhenStationsConnected) {
-				delay = reconnectDelayWhenStationsConnected;
+				ESP_LOGV(TAG_FALLBACK, "Reconnect retry scheduled, with %u stations connected to AP", sta_list.num);
+				scheduleDelayedReconnectAsStation(reconnectDelayWhenStationsConnected / 1000 / portTICK_PERIOD_MS);
+				return;
 			}
 			else {
-				ESP_LOGV(TAG_FALLBACK, "Waiting for client stations disconnect events");
+				ESP_LOGV(TAG_FALLBACK, "Waiting for %u client stations disconnect events", sta_list.num);
 				return; // wait for the disconnect events
 			}
 		}
-
-		nextReconnectTimestamp = std::max<uptime_t>(nextReconnectTimestamp, now + delay);
-
-		delay = (nextReconnectTimestamp - now) / 1000; // ms
-		ESP_LOGV(TAG_FALLBACK, "Next reconnect attempt in %" PRIu64 "ms", delay);
-		if (unlikely(xTimerReset(fallbackReconnectTimer, 0) == pdFAIL)) {
-			ESP_LOGW(TAG_FALLBACK, "Failed to reset timer for delayed reconnect");
-		}
-		xTimerChangePeriod(fallbackReconnectTimer, delay / portTICK_PERIOD_MS, 0);
-	}
-	else /* mode == WIFI_MODE_STA */ {
-		ESP_LOGV(TAG_FALLBACK, "Reconnecting...");
-		esp_wifi_connect();
-
-		if (fallbackTimeout) {
-			if (esp_timer_get_time() - disconnectedTimestamp >= fallbackTimeout) {
-				ESP_LOGW(TAG_FALLBACK, "Cannot reconnect as STA, falling back to AP...");
-
-				if (!ap_netif) ap_netif = esp_netif_create_default_wifi_ap();
-				// IP not set, using the default one (192.168.4.1)
-
-				esp_wifi_set_mode(WIFI_MODE_APSTA);
-				esp_netif_dhcps_start(ap_netif);
-			}
+		else /* sta_list.num == 0 */ {
+			ESP_LOGV(TAG_FALLBACK, "Reconnect retry scheduled, since no stations connected to AP");
+			scheduleDelayedReconnectAsStation(reconnectDelayWhenNoStations / 1000 / portTICK_PERIOD_MS);
+			return;
 		}
 	}
+	else if (fallbackTimeout) {
+		const auto timeSinceDisconnect = esp_timer_get_time() - disconnectedTimestamp;
+		if (timeSinceDisconnect >= fallbackTimeout) {
+			ESP_LOGI(TAG_FALLBACK, "Cannot reconnect as STA, falling back to AP...");
+
+			if (!ap_netif) ap_netif = esp_netif_create_default_wifi_ap();
+			// IP not set, using the default one (192.168.4.1)
+
+			esp_wifi_set_mode(WIFI_MODE_APSTA);
+			esp_netif_dhcps_start(ap_netif);
+
+			scheduleDelayedReconnectAsStation(reconnectDelayWhenNoStations / 1000 / portTICK_PERIOD_MS);
+			return;
+		}
+		const auto remainingTime = fallbackTimeout - timeSinceDisconnect;
+		ESP_LOGV(TAG_FALLBACK, "Reconnect retry scheduled - fallback to AP in %" PRIi64 "us", remainingTime);
+	}
+	else {
+		ESP_LOGV(TAG_FALLBACK, "Reconnect retry scheduled - fallback not configured");
+	}
+	scheduleDelayedReconnectAsStation(reconnectMinimalDelay / 1000 / portTICK_PERIOD_MS);
+}
+
+/// Event handler for WIFI_EVENT_STA_DISCONNECTED, called when our STA disconnects from AP, but also on connect failure.
+/// See https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi.html#wifi-event-sta-disconnected
+void handle_sta_disconnected(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+{
+	const auto& eventData = *static_cast<const wifi_event_sta_disconnected_t*>(event_data);
+	if (disconnectedTimestamp) {
+		ESP_LOGD(TAG_FALLBACK, "Failed to connect as station! reason=%u rssi=%d", eventData.reason, eventData.rssi);
+	}
+	else /* disconnectedTimestamp == 0, was connected, but not anymore */ {
+		ESP_LOGD(TAG_FALLBACK, "Disconnected! reason=%u rssi=%d", eventData.reason, eventData.rssi);
+		disconnectedTimestamp = esp_timer_get_time();
+	}
+	scheduleDelayedReconnectAsStation();
 }
 
 void handle_ap_stadisconnect(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
+	// If some station disconnect from our AP, it might be good time to reconnect as STA
 	if (disconnectedTimestamp) {
-		wifi_sta_list_t sta_list;
-		if (esp_err_t err = esp_wifi_ap_get_sta_list(&sta_list); err != ESP_OK) {
-			ESP_ERROR_CHECK_WITHOUT_ABORT(err);
-			sta_list.num = 0;
-		}
-		ESP_LOGV(TAG_FALLBACK, "Stations count: %u", sta_list.num);
-		if (sta_list.num == 0) {
-			possiblyReconnectAsStationOrDelay();
-		}
+		scheduleDelayedReconnectAsStation();
 	}
 }
 
@@ -190,6 +211,7 @@ esp_err_t registerDisconnectEventHandlers() {
 	ESP_LOGV(TAG_FALLBACK, "Registering disconnect event handlers");
 	if (esp_err_t err = esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, handle_sta_disconnected, nullptr, &ehi_sta_disconnect); err != ESP_OK) return err;
 	if (esp_err_t err = esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, handle_ap_stadisconnect, nullptr, &ehi_ap_stadisconnect); err != ESP_OK) return err;
+	// TODO: add WIFI_EVENT_AP_STACONNECTED to delay reconnecting as STA
 	return ESP_OK;
 }
 esp_err_t unregisterDisconnectEventHandlers() {
@@ -242,8 +264,9 @@ void init()
 	}
 
 	wifi_mode_t mode;
-	if (likely(load_wifi_mode_from_nvs(*nvs_handle, mode)) == ESP_OK) {
-		/* Start networking as configured (in NVS) */
+	if (likely(load_wifi_mode_from_nvs(*nvs_handle, mode)) == ESP_OK && !FORCE_WIFI_DEFAULTS) {
+		// Start networking as configured (in NVS). 
+		// Note that some stuff (like SSIDs & passwords) are persisted by Wi-Fi stack internally.
 
 		const bool use_ap  = mode == WIFI_MODE_AP  || mode == WIFI_MODE_APSTA;
 		const bool use_sta = mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA;
@@ -300,7 +323,7 @@ void init()
 		WIFI_EVENT, WIFI_EVENT_STA_START, 
 		[] (void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 			ESP_LOGV(TAG_INIT_NETWORK, "Station started, trying to connect");
-			esp_wifi_connect();
+			connectAsStation();
 		}, 
 		nullptr, nullptr
 	));
@@ -309,16 +332,19 @@ void init()
 		WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, 
 		[] (void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
 			disconnectedTimestamp = 0;
-			xTimerStop(fallbackReconnectTimer, 0);
+			xTimerStop(reconnectTimer, 0);
 		}, 
 		nullptr, nullptr
 	));
 
 	ESP_ERROR_CHECK(registerDisconnectEventHandlers());
 
-	fallbackReconnectTimer = xTimerCreate(
-		"ap-fallback", reconnectDelayWhenNoStations / 1000 / portTICK_PERIOD_MS, pdFALSE, static_cast<void*>(0), 
-		[] (TimerHandle_t) { possiblyReconnectAsStationOrDelay(); }
+	reconnectTimer = xTimerCreate(
+		"wifi-reconnect", // name
+		reconnectDelayWhenNoStations / 1000 / portTICK_PERIOD_MS, // period in ticks
+		pdFALSE, // auto-reload
+		nullptr, // ??? static_cast<void*>(0)
+		[] (TimerHandle_t) { connectAsStation(); } // callback
 	);
 
 	ESP_ERROR_CHECK(esp_wifi_start());
@@ -434,13 +460,13 @@ inline esp_err_t config__ap(
 			return ESP_FAIL;
 		switch (key_hash) {
 			case fnv1a32("ssid"): {
-				wifi_config.ssid_len = std::strlen(input + value_token->start);
+				wifi_config.ssid_len = value_length;
 				break;
 			}
 			case fnv1a32("psk"):
 			case fnv1a32("password"): {
 				if (value_token->type == JSMN_STRING && value_length != 0) {
-					wifi_config.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+					wifi_config.authmode = WIFI_AUTH_WPA2_PSK;
 				}
 				else {
 					wifi_config.authmode = WIFI_AUTH_OPEN;
@@ -483,13 +509,24 @@ inline esp_err_t config__sta(
 		);
 		if (unlikely(!has_simple_value(value_token)))
 			return ESP_FAIL;
-		// const size_t value_length = value_token->end - value_token->start;
+		const size_t value_length = value_token->end - value_token->start;
 		const auto key_hash = fnv1a32(input + key_token->start, input + key_token->end);
 		if (config__common_keys(input, key_hash, value_token, reinterpret_cast<wifi_common_config_t&>(wifi_config), ip_info) != ESP_OK)
 			return ESP_FAIL;
 		switch (key_hash) {
 			case fnv1a32("static"): {
 				static_ip = parseBooleanFast(input + value_token->start);
+				break;
+			}
+			case fnv1a32("psk"):
+			case fnv1a32("password"): {
+				wifi_config.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+				if (value_token->type == JSMN_STRING && value_length != 0) {
+					wifi_config.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+				}
+				else {
+					wifi_config.threshold.authmode = WIFI_AUTH_OPEN;
+				}
 				break;
 			}
 		}
@@ -520,8 +557,8 @@ esp_err_t config(
 	std::shared_ptr<nvs::NVSHandle> nvs_handle = nvs::open_nvs_handle(NVS_NETWORK_NAMESPACE, NVS_READWRITE, &nvs_result);
 	ESP_ERROR_CHECK(nvs_result);
 
-	wifi_ap_config_t ap_config;
-	wifi_sta_config_t sta_config;
+	wifi_ap_config_t ap_config = {};
+	wifi_sta_config_t sta_config = {};
 	esp_wifi_get_config(WIFI_IF_AP,  reinterpret_cast<wifi_config_t*>(&ap_config));
 	esp_wifi_get_config(WIFI_IF_STA, reinterpret_cast<wifi_config_t*>(&sta_config));
 
@@ -601,9 +638,9 @@ esp_err_t config(
 					}
 					case fnv1a32("fallback"): {
 						fallbackTimeout = std::atoi(input + value_token->start) * 1000;
-						if (fallbackTimeout && fallbackTimeout < 5'000'000) {
-							ESP_LOGD(TAG_CONFIG_NETWORK, "Fallback timeout clamped to minimal value of 5 seconds.");
-							fallbackTimeout = 5'000'000;
+						if (fallbackTimeout && fallbackTimeout < reconnectDelayWhenNoStations) {
+							ESP_LOGD(TAG_CONFIG_NETWORK, "Fallback timeout clamped to minimal value.");
+							fallbackTimeout = reconnectDelayWhenNoStations;
 						}
 						break;
 					}
@@ -636,7 +673,7 @@ esp_err_t config(
 		// Stop reconnecting behaviour
 		unregisterDisconnectEventHandlers();
 		disconnectedTimestamp = 0;
-		xTimerStop(fallbackReconnectTimer, 1);
+		xTimerStop(reconnectTimer, 0);
 
 		esp_wifi_disconnect();
 		esp_wifi_stop();
