@@ -26,7 +26,7 @@ Hardware consist of:
 		* 2x 32-bit LX6 CPU; up to 240 MHz; 520 KB SRAM.
 		* 802.11 b/g/n Wi-Fi and Bluetooth 4.2 BR/EDR with BLE
 	* PSRAM on board, adding 4 MB.
-	* OV2640 camera.
+	* [OV2640 camera](https://www.uctronics.com/download/cam_module/OV2640DS.pdf).
 	* MicroSD card slot (unused, as GPIOs are used for motors and flash LED).
 	* 2 LEDs: red internal pulled high, and bright white external, acting for camera flash.
 * Motors driver: [L298N-based module](https://abc-rc.pl/product-pol-6196-Modul-sterownika-L298N-do-silnikow-DC-i-krokowych-Arduino.html?query_id=1), able to drive 2 DC motors.
@@ -404,7 +404,8 @@ Controls:
 
 ### Interesting materials
 
-* [ESP-IDF 4.4.3 for ESP32 - Programming Guide](https://docs.espressif.com/projects/esp-idf/en/v4.4.3/esp32/index.html) - including API references, examples, guides and other resources.
+* [Some information about ESP32-CAM AI Thinker board used in this project](https://github.com/raphaelbs/esp32-cam-ai-thinker/)
+* [ESP-IDF 5.3.1 for ESP32 - Programming Guide](https://docs.espressif.com/projects/esp-idf/en/v5.3.1/esp32/index.html) - including API references, examples, guides and other resources.
 * [YouTube series about RTOS](https://www.youtube.com/watch?v=F321087yYy4&list=PLEBQazB0HUyQ4hAPU1cJED6t3DU0h34bz) by Digi-Key. Great introduction to ESP32-flavoured RTOS, with exercises for viewer.
 * [Program to record an MJPEG AVI video on the SD Card of an ESP32-CAM](https://github.com/jameszah/ESP32-CAM-Video-Recorder), along with many useful notes about ESP32-CAM and low cost recording to [AVI](https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference) itself.
 
@@ -412,6 +413,26 @@ Controls:
 
 ### To-do
 
++ Figure out most performant method of taking the picture
+	+ Testing just with `camera.py`, which includes task of sending it via WiFi:
+		+ With XCLK 20MHz:
+			+ JPEG 240x240 = 48 FPS, 125 KB/s.
+			+ GRAYSCALE 96x96 = 12 FPS, 111 KB/s. Why is it so slow?
+			+ YUV 96x96 = 12 FPS, 220 KB/s. Well, it's expected, since grayscale is calculated from it.
+		+ With XCLK 10MHz (tried because [some people suggested it might better](https://github.com/espressif/esp32-camera/issues/15)):
+			+ JPEG 240x240 = 25 FPS, 79 KB/s.
+			+ GRAYSCALE 96x96 = 6 FPS, 57 KB/s.
+		+ Maybe it's possible to get better framerate with YUV/GRAYSCALE, [some people online claim](https://github.com/espressif/esp32-camera/issues/140), also [some tips on VSYNC issues around it](https://github.com/espressif/esp32-camera/issues/99).
++ Movement detection into rotating around
+	+ diff next frames in gray scale
+	+ ignore margin
+	+ maybe figure out how to select which previous frame to compare to (instead of immediately previous one)
+	+ no movement -> do nothing (or spin slowly?) 
+	+ little movement -> find position (rect and then center) and rotate somewhat
+	+ too much movement -> do nothing? (safety)
++ Test & fix driving model used in control.py script
++ Checkout mobile app (related project), play around, fix any obvious issues
++ Make sure caching for HTTP is disabled for dynamic routes.
 + Add remaining controls for HTTP endpoint
 + After updating to ESP-IDF 5.X:
 	+ [Update to new motors/PWM driver](https://docs.espressif.com/projects/esp-idf/en/v5.0.7/esp32/migration-guides/release-5.x/peripherals.html#mcpwm), currently there are warnings about it (deprecation) when building.
@@ -453,6 +474,7 @@ Controls:
 + Fix `esp32-camera` `fb_size` when using JPEG to allow smallest 96x96 to work. Having minimum of 2048 seems to work, using more for good measure seems advised. [(issue on github)](https://github.com/espressif/esp32-camera/issues/436)
 + [Investigate rare bad JPEG issues](https://github.com/espressif/esp32-camera/issues/162) (missing 0xD9 and junk data).
 + Explore hidden features of the camera, see https://github.com/espressif/esp32-camera/issues/203
++ Rumor: `.xclk_freq_hz = 10'000'000,` for `camera_config_t`? 10 MHz might be better than 20 MHz, see https://github.com/espressif/esp32-camera/issues/15
 + Isn't `COM8_AGC_EN` in the camera registers definitions off by 1? 
 + Camera parameters are better described in [old CircuitPython bindings docs for the esp32_camera library](https://web.archive.org/web/20221006004020/https://docs.circuitpython.org/en/latest/shared-bindings/esp32_camera/index.html) (or [newer link](https://docs.circuitpython.org/en/8.2.x/shared-bindings/espcamera/index.html), <small>probably they renamed the library wrapper</small>)
 + Create fast and C++ `constexpr` string to IP 4 function
