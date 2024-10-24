@@ -70,7 +70,9 @@
 		"i2c_types.h": "c",
 		"esp_log.h": "c",
 		"i2c_master.h": "c",
-		"stdbool.h": "c"
+		"stdbool.h": "c",
+		"ll_cam.h": "c",
+		"cam_hal.h": "c"
 	},
 	"cSpell.words": [
 		"ALPHABITFIELDS",
@@ -176,6 +178,7 @@
 	"explorer.autoRevealExclude": {
 		"**/.venv": true,
 		"**/.pio": true,
+		"**/components": true,
 		"**/managed_components": true,
 		"**/libs": true,
 		"**/logs": true,
@@ -186,5 +189,53 @@
 	"terminal.integrated.windowsEnableConpty": false,
 
 	// Hide Git submodules (used as dependencies, in `libs/` folder)
-	"git.detectSubmodules": false
+	"git.detectSubmodules": false,
+
+	// Improve searching experience
+	"search.useIgnoreFiles": false,
+	"search.exclude": {
+		// Defaults in VS Code
+		"**/node_modules": true,
+		"**/bower_components": true,
+		"**/*.code-search": true,
+		// More, specific to this project
+		"**/.venv": true,
+		"**/.pio": true,
+		"**/logs": true,
+		"**/private/capture": true,
+		// Platform specific code other than the one used
+		"**/components/espressif__esp32-camera/target/esp32s2": true,
+		"**/components/espressif__esp32-camera/target/esp32s3": true,
+	},
+
+	// Fix PlatformIO toolbar "Upload" as without serial monitor, 
+	// since the board/programmator requires manual boot mode selection, 
+	// can't jump into monitor after upload without power off, switch and on.
+	"platformio-ide.toolbar": [
+		{
+			"text": "$(check)",
+			"tooltip": "PlatformIO: Build",
+			"commands": "platformio-ide.build"
+		},
+		{
+			"text": "$(arrow-right)",
+			"tooltip": "PlatformIO: Upload",
+			"commands": "platformio-ide.upload"
+		},
+		{
+			"text": "$(trashcan)",
+			"tooltip": "PlatformIO: Clean",
+			"commands": "platformio-ide.clean"
+		},
+		{
+			"text": "$(plug)",
+			"tooltip": "PlatformIO: Serial Monitor",
+			"commands": "platformio-ide.serialMonitor"
+		},
+		{
+			"text": "$(terminal)",
+			"tooltip": "PlatformIO: New Terminal",
+			"commands": "platformio-ide.newTerminal"
+		}
+	],
 }
