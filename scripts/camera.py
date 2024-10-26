@@ -71,6 +71,10 @@ def handle_mjpeg_stream(args, config):
 			jpg = buffer[a:b+2]
 			buffer = buffer[b+2:]
 			image = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+			height, width, channels = image.shape
+			if width * args.scale >= 120:
+				cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+				cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
 			cv2.imshow(window_name, image)
 
 			total_frames += 1
@@ -96,6 +100,11 @@ def handle_jpeg_frame(args, config):
 	response = requests.get(f'http://{args.ip}/capture')
 	if response.status_code == 200:
 		image = cv2.imdecode(np.frombuffer(response.content, dtype=np.uint8), cv2.IMREAD_COLOR)
+		height, width, channels = image.shape
+		if width * args.scale >= 120:
+			cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+			cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+
 		cv2.imshow(window_name, image)
 
 		if args.save:
@@ -155,6 +164,10 @@ def handle_static_size_stream(args, config, pixformat):
 	# TODO: This doesn't support changing framesize during the stream;
 	#	It would require server to include width & height before the pixels data
 	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
+	if width * args.scale >= 120:
+		cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+		cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+
 	if pixformat == PIXFORMAT_RGB565 or pixformat == PIXFORMAT_YUV422:
 		chunk_size = width * height * 2
 	elif pixformat == PIXFORMAT_GRAYSCALE:
@@ -197,6 +210,10 @@ def handle_static_size_stream(args, config, pixformat):
 
 def handle_static_size_frame(args, config, pixformat):
 	width, height = FRAMESIZE_TO_DIMS[int(config['camera.framesize'])]
+	if width * args.scale >= 120:
+		cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+		cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+
 	response = requests.get(f'http://{args.ip}/capture')
 	if response.status_code == 200:
 		cv2.imshow(window_name, decode_static_size_frame(response.content, width, height, pixformat))
@@ -230,6 +247,7 @@ def main():
 	parser.add_argument('--ip', '--address', help=f'IP of the device. Defaults to the one from the config file or {DEFAULT_IP}.', required=False)
 	parser.add_argument('--stream', help=argparse.SUPPRESS, required=False, action='store_true') # allow '--stream' just because I want to
 	parser.add_argument('--frame', help='If set, only retrieves single frame.', required=False, action='store_true')
+	parser.add_argument('--scale', help='Scale factor for displaying the received image (not saving).', required=False, type=int, default=1)
 	parser.add_argument('--save', metavar='PATH', help='If set, specifies path to file (or folder) for the frame (or stream) to be saved.', required=False)
 	parser.add_argument('--save-fps', metavar='FPS', help='If set, limits number of frames being saved.', required=False, type=fps_type)
 	parser.add_argument('--overwrite', help='Allow overwriting existing files (warning: might remove files!)', required=False, action='store_true')
