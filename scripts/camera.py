@@ -216,7 +216,10 @@ def handle_static_size_frame(args, config, pixformat):
 
 	response = requests.get(f'http://{args.ip}/capture')
 	if response.status_code == 200:
-		cv2.imshow(window_name, decode_static_size_frame(response.content, width, height, pixformat))
+		if response.headers['Content-Type'] == 'image/bmp':
+			cv2.imshow(window_name, cv2.imdecode(np.frombuffer(response.content, dtype=np.uint8), cv2.IMREAD_COLOR))
+		else: # maybe binary
+			cv2.imshow(window_name, decode_static_size_frame(response.content, width, height, pixformat))
 
 		if args.save:
 			with open(args.save, 'wb') as file:

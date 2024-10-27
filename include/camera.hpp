@@ -28,6 +28,7 @@ public:
 		return fb != nullptr && SemaphoreGuard::operator bool();
 	}
 
+	operator camera_fb_t*() const { return fb; }
 	camera_fb_t& operator*() const { return *fb; }
 	camera_fb_t* operator->() const { return fb; }
 

@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <string_view>
 #include <memory>
+#include <vector>
+#include <algorithm>
 #include <esp_log.h>
 #include <esp_wifi.h>
 #include <esp_mac.h>
@@ -13,6 +15,7 @@
 #include <jsmn.h>
 #include "common.hpp"
 #include "camera.hpp"
+#include "bmp.hpp"
 
 namespace app::network { // from network.cpp
 	esp_err_t config(char* input, jsmntok_t* root, char* output, size_t output_length, int* output_return); 
@@ -490,9 +493,43 @@ esp_err_t capture_handler(httpd_req_t* req)
 
 	switch (fb->format) {
 		case PIXFORMAT_GRAYSCALE: {
-			httpd_resp_set_type(req, "application/octet-stream");
-			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.bin");
-			httpd_resp_send(req, (const char*)fb->buf, fb->len);
+			// Prepare BMP header with 8 bpp, which requires palette
+			using namespace bmp;
+			BITMAPFILEHEADER fileHeader;
+			fileHeader.reserved1 = fileHeader.reserved2 = 0x4141;
+			BITMAPINFOHEADER dibHeader;
+			dibHeader.width = fb->width;
+			dibHeader.height = fb->height;
+			dibHeader.bitsPerPixel = 8;
+			dibHeader.compression = BI_RGB;
+			dibHeader.colorsUsed = 256;
+			std::vector<ColorTableEntry> colorTable(dibHeader.colorsUsed);
+			const size_t colorTableBytesSize = dibHeader.colorsUsed * sizeof(ColorTableEntry);
+			uint8_t i = 0;
+			for (auto&& entry : colorTable) {
+				entry = { i, i, i, 0 };
+				i += 1;
+			}
+			dibHeader.imageSize = fb->len;
+			fileHeader.offsetToPixelArray = sizeof(fileHeader) + sizeof(dibHeader) + colorTableBytesSize;
+			fileHeader.size = fileHeader.offsetToPixelArray + dibHeader.imageSize;
+
+			// BMP pixels data order is bottom-to-top, so swap rows
+			auto iRow = fb->buf;
+			auto jRow = fb->buf + (fb->height - 1) * fb->width;
+			while (iRow < jRow) {
+				std::swap_ranges(iRow, iRow + fb->width, jRow);
+				iRow += fb->width;
+				jRow -= fb->width;
+			}
+
+			httpd_resp_set_type(req, "image/bmp");
+			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.bmp");
+			httpd_resp_send_chunk(req, reinterpret_cast<const char*>(&fileHeader), sizeof(fileHeader));
+			httpd_resp_send_chunk(req, reinterpret_cast<const char*>(&dibHeader), sizeof(dibHeader));
+			httpd_resp_send_chunk(req, reinterpret_cast<const char*>(colorTable.data()), colorTableBytesSize);
+			httpd_resp_send_chunk(req, reinterpret_cast<const char*>(fb->buf), fb->len);
+			httpd_resp_send_chunk(req, nullptr, 0); // end
 			return ESP_OK;
 		}
 		case PIXFORMAT_JPEG: {
