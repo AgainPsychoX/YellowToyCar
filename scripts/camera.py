@@ -80,8 +80,8 @@ def handle_mjpeg_stream(args, config):
 			total_frames += 1
 			from_start = time() - start
 			fps = total_frames / from_start
-			total_bytes += len(chunk)
-			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB/s: {total_bytes / from_start / 1024:.3f}')
+			total_bytes += len(jpg)
+			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB: {len(jpg) / 1024:.3f}\tKB/s: {total_bytes / from_start / 1024:.3f}')
 
 			if args.save:
 				saved_fps = saved_frames / from_start
