@@ -7,7 +7,7 @@ def main():
 	parser = argparse.ArgumentParser(description='''This script allows to send & retrieve config from the car.''')
 	parser.add_argument('--status', help='Request status before sending/requesting config.', required=False, action='store_true')
 	parser.add_argument('--status-only', help='Only request status.', required=False, action='store_true')
-	parser.add_argument('--config-file', metavar='PATH', help='JSON file to be send as config.', required=False)
+	parser.add_argument('--file', metavar='PATH', help='JSON file to be send as config.', required=False)
 	parser.add_argument('--wifi-mode', help='Overwrite WiFi mode from config.', required=False, choices=['ap', 'sta', 'apsta', 'nat', 'null'])
 	parser.add_argument('--ip', '--address', help='IP of the device. Defaults to the one used for AP mode from new config or 192.168.4.1.', required=False)
 	parser.add_argument('--read-only', help='If set, only reads the request (GET request instead POST).', required=False, action='store_true')
@@ -15,8 +15,8 @@ def main():
 	args = parser.parse_args()
 	args.status = args.status or args.status_only
 
-	if args.config_file:
-		target_config = benedict(args.config_file, format='json')
+	if args.file:
+		target_config = benedict(args.file, format='json')
 	else:
 		target_config = benedict()
 
