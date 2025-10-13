@@ -5,12 +5,23 @@
 #include "common.hpp"
 
 #define MOTORS_FREQUENCY 100 // Hz
-#define GPIO_MOTORS_RIGHT_FORWARD  GPIO_NUM_12
-#define GPIO_MOTORS_RIGHT_BACKWARD GPIO_NUM_2
-#define GPIO_MOTORS_LEFT_FORWARD   GPIO_NUM_15
-#define GPIO_MOTORS_LEFT_BACKWARD  GPIO_NUM_14
-#define GPIO_MAIN_LIGHT            GPIO_NUM_4  // External bright white
-#define GPIO_OTHER_LIGHT           GPIO_NUM_33 // Internal red (pulled high)
+#if defined(MODEL_ESP32CAM)
+#	define GPIO_MOTORS_RIGHT_FORWARD  GPIO_NUM_12
+#	define GPIO_MOTORS_RIGHT_BACKWARD GPIO_NUM_2
+#	define GPIO_MOTORS_LEFT_FORWARD   GPIO_NUM_15
+#	define GPIO_MOTORS_LEFT_BACKWARD  GPIO_NUM_14
+#	define GPIO_MAIN_LIGHT            GPIO_NUM_4  // External bright white
+#	define GPIO_OTHER_LIGHT           GPIO_NUM_33 // Internal red (pulled high)
+#elif defined(MODEL_ESP32S3EYE)
+#	define GPIO_MOTORS_RIGHT_FORWARD  GPIO_NUM_42
+#	define GPIO_MOTORS_RIGHT_BACKWARD GPIO_NUM_41
+#	define GPIO_MOTORS_LEFT_FORWARD   GPIO_NUM_47
+#	define GPIO_MOTORS_LEFT_BACKWARD  GPIO_NUM_21
+#	define GPIO_MAIN_LIGHT            GPIO_NUM_48  // External bright white (WS2812)
+#	define GPIO_OTHER_LIGHT           GPIO_NUM_2   // Internal red (pulled high)
+#else
+#	error "Unsupported model"
+#endif
 
 namespace app::hal 
 {

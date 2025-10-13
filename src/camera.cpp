@@ -92,6 +92,10 @@ esp_err_t my_esp_camera_init(
 		.grab_mode = CAMERA_GRAB_LATEST, 
 		// TODO: consider using other fb_count & grab_mode for streaming, 
 		//	and other for AI processing (maybe even CAMERA_FB_IN_DRAM?)
+
+#if CONFIG_CAMERA_CONVERTER_ENABLED
+		.conv_mode = CONV_DISABLE,
+#endif
 	};
 	return esp_camera_init(&camera_config);
 }

@@ -16,22 +16,25 @@ I also made Flutter mobile app for controlling the toy car, see [YellowToyCarApp
 
 
 
+<!----------------------------------------------------------------------------->
 
 ## Hardware
 
+There are 2 versions:
+
+### ESP32 based
+
 Hardware consist of:
 
-* Microcontroller: [ESP32-Cam AI-Thinker development board](https://microcontrollerslab.com/esp32-cam-ai-thinker-pinout-gpio-pins-features-how-to-program/)
-	* ESP32S chip
-		* 2x 32-bit LX6 CPU; up to 240 MHz; 520 KB SRAM.
-		* 802.11 b/g/n Wi-Fi and Bluetooth 4.2 BR/EDR with BLE
-	* PSRAM on board, adding 4 MB.
-	* [OV2640 camera](https://www.uctronics.com/download/cam_module/OV2640DS.pdf).
+* Microcontroller board: ESP32-Cam AI-Thinker development board ([about](https://microcontrollerslab.com/esp32-cam-ai-thinker-pinout-gpio-pins-features-how-to-program/))
+	* ESP32-S module ([specification](https://agelectronica.lat/pdfs/textos/E/ESP-32S.PDF))
+		* ESP32 processor ([datasheet](https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf), [technical reference manual](https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf))
+	* OV2640 camera ([datasheet](https://www.uctronics.com/download/cam_module/OV2640DS.pdf))
 	* MicroSD card slot (unused, as GPIOs are used for motors and flash LED).
 	* 2 LEDs: red internal pulled high, and bright white external, acting for camera flash.
+* External antenna for ESP32 Wi-Fi connectivity is used.
 * Motors driver: [L298N-based module](https://abc-rc.pl/product-pol-6196-Modul-sterownika-L298N-do-silnikow-DC-i-krokowych-Arduino.html?query_id=1), able to drive 2 DC motors.
 * 4 brushed motors, controlled in pairs, attached by gears to wheels.
-* External antenna for ESP32 Wi-Fi connectivity is used.
 * Battery (3 cells of 4 V, total 12 V for main board, 8 V for motors used).
 * Additional circuitry:
 	* Voltage converter (down to 5V, red LED)
@@ -40,11 +43,22 @@ Hardware consist of:
 	* Switch for programming mode (ON to program, OFF to execute). 
 * Plastic grid and packaging.
 
+### ESP32S3 based
+
+* Microcontroller board: ESP32-S3 WROOM N16R8 knock-off ([bought online](https://allegro.pl/oferta/plytka-esp32-z-kamera-esp32-s3-cam-z-wifi-ble-16227127079), [other seller, incl. pinout](https://pl.aliexpress.com/item/1005006676536381.html))
+	* ESP32-S3 module ([datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf))
+		* ESP32-S3 processor ([datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf), [technical reference manual](https://www.espressif.com/sites/default/files/documentation/esp32-s3_technical_reference_manual_en.pdf))
+* No antenna, built-in PCB only (no connector available).
+* The same motors and motors driver, the same battery.
+* Additional circuitry:
+	* Voltage stabilizer (down to 5V, since the board works with USB anyway).
+* ...
+
 <!-- TODO: Pictures here, in table -->
 
 
 
-
+<!----------------------------------------------------------------------------->
 
 ## Software
 
@@ -447,6 +461,12 @@ Controls:
 		+ One core for HTTP and trash tasks
 		+ Other core for networking & fast control (UDP)
 	+ Trace tasks? `vTaskList`/`uxTaskGetSystemState`
++ ESP32S3
+	+ Allow to control RGB light (at least as main light)
++ Over The Air updates
+	+ https://search.brave.com/search?q=platformio+esp32+over+the+air+update&summary=1&summary_og=096817bf0bd40289efcf28
+	+ https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/ota.html
+	+ https://community.platformio.org/t/esp32-ota-using-platformio/15057/7
 + Website
 	+ Camera
 	+ Basic controls
@@ -466,6 +486,9 @@ Controls:
 + Consider using some error codes instead full error messages (maybe some macro?)
 + Allow some calibration for motors
 + Allow changing frequency for PWM signals for motors
++ Using SD card
+	+ The ESP32-CAM AI Thinker board requires modifications and tricks to barely fit, but it's possible if motors use GPIO12, GPIO13, GPIO32 (camera PWDN hardwired), GPIO33 (red LED repurposed), and SD card to be configured to use 1-bit width (slow).
+	+ The ESP32-S3 based board with camera that is used is fine.
 + Control LEDs with PWM?
 + Should there be status/echo packet types for UDP?
 + How does JSMN JSON handle escaping characters? Some strings like SSID/PSK might be invalid...
