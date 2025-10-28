@@ -2,6 +2,7 @@ import os
 import shutil
 import argparse
 from benedict import benedict
+from collections import deque
 from time import time, strftime
 import cv2
 import requests
@@ -56,6 +57,7 @@ def handle_mjpeg_stream(args, config):
 	total_frames = 0
 	saved_frames = 0
 	total_bytes = 0
+	last_frame_points = deque()
 	response = requests.get(f'http://{args.ip}:81/stream', stream=True)
 	if response.status_code == 200:
 		buffer = bytes()
@@ -70,18 +72,28 @@ def handle_mjpeg_stream(args, config):
 
 			jpg = buffer[a:b+2]
 			buffer = buffer[b+2:]
+
+			now = time()
+			last_frame_points.append((now, total_bytes))
+			while len(last_frame_points) > 1 and last_frame_points[0][0] < (now - args.fps_window): # keep at least 2
+				last_frame_points.popleft()
+			if len(last_frame_points) > 1:
+				time_diff = last_frame_points[-1][0] - last_frame_points[0][0]
+				fps = len(last_frame_points) / time_diff
+				bps = (last_frame_points[-1][1] - last_frame_points[0][1]) / time_diff
+			else: # first frame
+				fps = 0
+				bps = total_bytes
+			total_frames += 1
+			from_start = now - start
+			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB: {len(jpg) / 1024:.3f}\tKB/s: {bps / 1024:.3f}')
+
 			image = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
 			height, width, channels = image.shape
 			if width * args.scale >= 120:
 				cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 				cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
 			cv2.imshow(window_name, image)
-
-			total_frames += 1
-			from_start = time() - start
-			fps = total_frames / from_start
-			total_bytes += len(jpg)
-			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB: {len(jpg) / 1024:.3f}\tKB/s: {total_bytes / from_start / 1024:.3f}')
 
 			if args.save:
 				saved_fps = saved_frames / from_start
@@ -123,6 +135,7 @@ def decode_static_size_frame(data, width, height, pixformat):
 	if pixformat == PIXFORMAT_GRAYSCALE:
 		return np.frombuffer(data, np.uint8).reshape(height, width)
 	elif pixformat == PIXFORMAT_YUV422:
+		# TODO: use  cv2.cvtColor(..., cv2.COLOR_...) instead
 		# Read as YUV bytes
 		yuv = np.frombuffer(data, dtype=np.uint8)
 		y0 = yuv[0::4].astype(np.float32)
@@ -179,20 +192,32 @@ def handle_static_size_stream(args, config, pixformat):
 	total_frames = 0
 	saved_frames = 0
 	total_bytes = 0
+	last_frame_points = deque()
 	response = requests.get(f'http://{args.ip}:81/stream', stream=True)
 	if response.status_code == 200:
 		for chunk in response.iter_content(chunk_size=chunk_size):
-			# Discard stream part & boundary markers
+			total_bytes += len(chunk)
+
+			# Discard stream part & boundary markers by assuming they are different chunks
 			if len(chunk) != chunk_size:
 				continue
 
-			cv2.imshow(window_name, decode_static_size_frame(chunk, width, height, pixformat))
-
+			now = time()
+			last_frame_points.append((now, total_bytes))
+			while len(last_frame_points) > 1 and last_frame_points[0][0] < (now - args.fps_window): # keep at least 2
+				last_frame_points.popleft()
+			if len(last_frame_points) > 1:
+				time_diff = last_frame_points[-1][0] - last_frame_points[0][0]
+				fps = len(last_frame_points) / time_diff
+				bps = (last_frame_points[-1][1] - last_frame_points[0][1]) / time_diff
+			else: # first frame
+				fps = 0
+				bps = total_bytes
 			total_frames += 1
-			from_start = time() - start
-			fps = total_frames / from_start
-			total_bytes += len(chunk)
-			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB/s: {total_bytes / from_start / 1024:.3f}')
+			from_start = now - start
+			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB/s: {bps / 1024:.3f}')
+
+			cv2.imshow(window_name, decode_static_size_frame(chunk, width, height, pixformat))
 
 			if args.save:
 				saved_fps = saved_frames / from_start
@@ -255,6 +280,7 @@ def main():
 	parser.add_argument('--save-fps', metavar='FPS', help='If set, limits number of frames being saved.', required=False, type=fps_type)
 	parser.add_argument('--overwrite', help='Allow overwriting existing files (warning: might remove files!)', required=False, action='store_true')
 	args = parser.parse_args()
+	args.fps_window = 10 # how many seconds 
 
 	if args.save:
 		args.save = os.path.normpath(args.save)
