@@ -62,6 +62,7 @@ def handle_mjpeg_stream(args, config):
 	if response.status_code == 200:
 		buffer = bytes()
 		for chunk in response.iter_content(chunk_size=4096):
+			total_bytes += len(chunk)
 			buffer += chunk
 			a = buffer.find(JPEG_SOI_MARKER)
 			if a == -1:
