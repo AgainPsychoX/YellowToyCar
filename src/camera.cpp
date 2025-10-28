@@ -316,6 +316,9 @@ esp_err_t config(
 				case fnv1a32("brightness"):
 					sensor->set_brightness(sensor, std::atoi(input + value_token->start));
 					break;
+				case fnv1a32("saturation"):
+					sensor->set_saturation(sensor, std::atoi(input + value_token->start));
+					break;
 
 				case fnv1a32("sharpness"): 
 					// TODO: not supported by original library
@@ -399,6 +402,9 @@ esp_err_t config(
 				case fnv1a32("special_effect"):
 					sensor->set_special_effect(sensor, std::atoi(input + value_token->start));
 					break;
+				case fnv1a32("colorbar"):
+					sensor->set_colorbar(sensor, parseBooleanFast(input + value_token->start));
+					break;
 
 				default:
 					ESP_LOGD(TAG_CONFIG_CAMERA, "Unknown field '%.*s', ignoring.", 
@@ -426,6 +432,7 @@ esp_err_t config(
 				"\"hmirror\":%d,"
 				"\"vflip\":%d,"
 				"\"contrast\":%d,"
+				"\"saturation\":%d,"
 				"\"brightness\":%d,"
 				"\"sharpness\":%d,"
 				"\"denoise\":%d,"
@@ -444,7 +451,8 @@ esp_err_t config(
 				"\"wpc\":%d,"
 				"\"raw_gma\":%d,"
 				"\"lenc\":%d,"
-				"\"special_effect\":%d"
+				"\"special_effect\":%d,"
+				"\"colorbar\":%d"
 			"}",
 			static_cast<uint8_t>(sensor->status.framesize),
 			static_cast<uint8_t>(sensor->pixformat),
@@ -452,6 +460,7 @@ esp_err_t config(
 			sensor->status.hmirror,
 			sensor->status.vflip,
 			sensor->status.contrast,
+			sensor->status.saturation,
 			sensor->status.brightness,
 			sensor->status.sharpness,
 			sensor->status.denoise,
@@ -470,7 +479,8 @@ esp_err_t config(
 			sensor->status.wpc,
 			sensor->status.raw_gma,
 			sensor->status.lenc,
-			sensor->status.special_effect
+			sensor->status.special_effect,
+			sensor->status.colorbar
 		);
 	}
 
