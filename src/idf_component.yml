@@ -1,3 +1,5 @@
 dependencies:
-  esp32-camera: "^2.0.13"
+  esp32-camera: # "^2.1.3" but with GDMA disconnect fix, see https://github.com/espressif/esp32-camera/pull/804 
+    git: https://github.com/cnadler86/esp32-camera.git
+    version: fix/gdma_disconnect # branch
   jsmn: "^1.1.0"

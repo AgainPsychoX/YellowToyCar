@@ -46,6 +46,7 @@ bool check_can_take_picture()
 		ESP_LOGE(TAG_CAMERA, "Failed to get frame buffer");
 		return false;
 	}
+	ESP_LOGD(TAG_CAMERA, "Took picture: width=%d height=%d len=%d", fb->width, fb->height, fb->len);
 	esp_camera_fb_return(fb);
 	return true;
 }
@@ -77,18 +78,23 @@ esp_err_t my_esp_camera_init(
 		.pin_vsync = CAM_PIN_VSYNC,
 		.pin_href = CAM_PIN_HREF,
 		.pin_pclk = CAM_PIN_PCLK,
-		.xclk_freq_hz = 20'000'000,
+		.xclk_freq_hz = 16'000'000,
+		// .xclk_freq_hz = 20'000'000, // TESTING
 		.ledc_timer = LEDC_TIMER_0,
 		.ledc_channel = LEDC_CHANNEL_0,
 		.pixel_format = pixformat,
 		.frame_size = framesize,
 		.jpeg_quality = 12,
-		.fb_count = 4,
-	#ifdef BOARD_HAS_PSRAM
-		.fb_location	= CAMERA_FB_IN_PSRAM,
-	#else
-		.fb_location	= CAMERA_FB_IN_DRAM, 
-	#endif
+		// TESTING...
+		.fb_count = 2,
+		// .fb_location = CAMERA_FB_IN_PSRAM,
+		.fb_location = CAMERA_FB_IN_DRAM, // TESTING
+	// 	.fb_count = 4,
+	// #ifdef BOARD_HAS_PSRAM
+	// 	.fb_location	= CAMERA_FB_IN_PSRAM,
+	// #else
+	// 	.fb_location	= CAMERA_FB_IN_DRAM, 
+	// #endif
 		.grab_mode = CAMERA_GRAB_LATEST, 
 		// TODO: consider using other fb_count & grab_mode for streaming, 
 		//	and other for AI processing (maybe even CAMERA_FB_IN_DRAM?)
@@ -158,7 +164,7 @@ void init()
 	// Note: `esp_camera_load_from_nvs` requires sensor to be initialized,
 	// so default/safe settings initializations needs to be performed first.
 
-	ESP_ERROR_CHECK(my_esp_camera_init());
+	ESP_ERROR_CHECK(my_esp_camera_init(PIXFORMAT_JPEG, FRAMESIZE_240X240)); // TESTING
 	check_can_take_picture();
 
 	if (esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE) != ESP_OK) {
