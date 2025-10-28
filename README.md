@@ -29,7 +29,7 @@ Hardware consist of:
 * Microcontroller board: ESP32-Cam AI-Thinker development board ([about](https://microcontrollerslab.com/esp32-cam-ai-thinker-pinout-gpio-pins-features-how-to-program/))
 	* ESP32-S module ([specification](https://agelectronica.lat/pdfs/textos/E/ESP-32S.PDF))
 		* ESP32 processor ([datasheet](https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf), [technical reference manual](https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf))
-	* OV2640 camera ([datasheet](https://www.uctronics.com/download/cam_module/OV2640DS.pdf))
+	* OV2640 camera ([datasheet: v2.2](https://www.uctronics.com/download/OV2640_DS.pdf) or [v1.8](https://jomjol.github.io/AI-on-the-edge-device-docs/datasheets/Camera.ov2640_ds_1.8_.pdf) or [v1.6](https://www.uctronics.com/download/cam_module/OV2640DS.pdf))
 	* MicroSD card slot (unused, as GPIOs are used for motors and flash LED).
 	* 2 LEDs: red internal pulled high, and bright white external, acting for camera flash.
 * External antenna for ESP32 Wi-Fi connectivity is used.

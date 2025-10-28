@@ -146,8 +146,10 @@
 		"PCLK",
 		"PIXFORMAT",
 		"platformio",
+		"popleft",
 		"PSRAM",
 		"PWDN",
+		"pycache",
 		"QCIF",
 		"QQVGA",
 		"QSXGA",
@@ -188,7 +190,8 @@
 		"WROOM",
 		"WROVER",
 		"XCLK",
-		"xtensa"
+		"xtensa",
+		"Zadig"
 	],
 
 	// Avoid VS Code file explorer expanding on some folders

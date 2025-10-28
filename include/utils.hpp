@@ -115,7 +115,7 @@ public:
 
 /// Compile-time version of `tolower`, without support for locales.
 constexpr char tolower(const char c) {
-    return (c < 'A' || 'Z' < c) ? c : c + ('a' - 'A');
+	return (c < 'A' || 'Z' < c) ? c : c + ('a' - 'A');
 }
 
 /// Returns result of saturated subtraction. Example: `3 - 7 == 0`.

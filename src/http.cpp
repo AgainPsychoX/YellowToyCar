@@ -467,7 +467,7 @@ esp_err_t config_handler(httpd_req_t* req)
 
 	if (unlikely(
 		config_root(nullptr, nullptr, buffer, bufferLength, &ret) != ESP_OK ||
-	    ret < 0 || static_cast<size_t>(ret) >= bufferLength
+		ret < 0 || static_cast<size_t>(ret) >= bufferLength
 	)) {
 		httpd_resp_send_500(req);
 		return ESP_FAIL;
