@@ -300,17 +300,21 @@ def main():
 		print('Fetching the config from the device')
 		config = benedict(f'http://{args.ip}/config', format='json', requests_options={'timeout': 5})
 
-	pixformat = int(config['camera.pixformat'])
-	if args.frame:
-		if pixformat == PIXFORMAT_JPEG:
-			handle_jpeg_frame(args, config)
-		else:
-			handle_static_size_frame(args, config, pixformat)
-	else: # stream
-		if pixformat == PIXFORMAT_JPEG:
-			handle_mjpeg_stream(args, config)
-		else:
-			handle_static_size_stream(args, config, pixformat)
+	try:
+		pixformat = int(config['camera.pixformat'])
+		if args.frame:
+			if pixformat == PIXFORMAT_JPEG:
+				handle_jpeg_frame(args, config)
+			else:
+				handle_static_size_frame(args, config, pixformat)
+		else: # stream
+			if pixformat == PIXFORMAT_JPEG:
+				handle_mjpeg_stream(args, config)
+			else:
+				handle_static_size_stream(args, config, pixformat)
+	except KeyboardInterrupt:
+		print('Interrupted')
+		pass
 
 if __name__ == '__main__':
 	main()
