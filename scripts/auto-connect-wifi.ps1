@@ -4,7 +4,8 @@ param(
 	[string]$TargetIp = "192.168.4.1",
 	[int]$CheckIntervalMilliseconds = 333,
 	[ValidateSet("OnlyInterface", "OnlyScan", "Both")]
-	[string]$SignalStrengthSource = "OnlyScan"
+	[string]$SignalStrengthSource = "OnlyScan",
+	[switch]$ShowRemoteSignal = $false
 )
 
 Write-Host "Starting Wi-Fi auto-connect for SSID: '$TargetSsid'"
@@ -37,6 +38,24 @@ while ($true) {
 				"OnlyInterface" { "Signal: $signalFromInterface." }
 				"OnlyScan"      { "Signal: $signalFromNetworks." }
 				"Both"          { "Signal: $signalFromInterface (if.) or $signalFromNetworks (scan)." }
+			}
+
+			if ($ShowRemoteSignal) {
+				try {
+					$localMac = ($interfaces | Select-String -Pattern "^\s+Physical address\s+:\s(.+)").Matches[0].Groups[1].Value.Trim().Replace("-", "").Replace(":", "").ToLower()
+					$statusResponse = Invoke-WebRequest -Uri "http://$TargetIp/status?details=1" -TimeoutSec 2 -UseBasicParsing
+					$status = $statusResponse.Content | ConvertFrom-Json
+					$remoteStation = $status.stations | Where-Object { ($_.mac.Replace("-", "").Replace(":", "").ToLower()) -eq $localMac }
+					if ($remoteStation) {
+						$remoteRssi = $remoteStation.rssi
+						$signalText += " Remote RSSI: ${remoteRssi}dBm."
+					}
+					else {
+						$signalText += " Remote RSSI: Missing."
+					}
+				} catch {
+					$signalText += " Remote RSSI: Error."
+				}
 			}
 
 			# Print, ending with ping 
