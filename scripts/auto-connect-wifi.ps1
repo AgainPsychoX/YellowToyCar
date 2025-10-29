@@ -8,6 +8,34 @@ param(
 	[switch]$ShowRemoteSignal = $false
 )
 
+function Get-SignalColor {
+	param(
+		[int]$Value,
+		[ValidateSet("percent", "dbm")]
+		[string]$Type
+	)
+
+	if ($Type -eq "percent") {
+		if ($Value -gt 90) { return "DarkGreen" }
+		if ($Value -gt 80) { return "Green" }
+		if ($Value -gt 70) { return "Yellow" }
+		if ($Value -gt 60) { return "DarkYellow" }
+		if ($Value -gt 50) { return "DarkRed" }
+		return "Red"
+	} elseif ($Type -eq "dbm") {
+		if ($Value -gt -40) { return "DarkGreen" }
+		if ($Value -gt -50) { return "Green" }
+		if ($Value -gt -60) { return "Yellow" }
+		if ($Value -gt -70) { return "DarkYellow" }
+		if ($Value -gt -80) { return "DarkRed" }
+		return "Red"
+	}
+}
+
+function Get-LogLineDate {
+	return "[$(Get-Date -Format 'HH:mm:ss.fff')]"
+}
+
 Write-Host "Starting Wi-Fi auto-connect for SSID: '$TargetSsid'"
 Write-Host "Press CTRL+C to stop."
 
@@ -34,46 +62,68 @@ while ($true) {
 				$signalFromNetworks = $scan | Where-Object { $_.Split(":")[0].Trim() -eq 'Signal' } | ForEach-Object { $_.Split(":")[1].Trim() }
 			}
 
-			$signalText = switch ($SignalStrengthSource) {
-				"OnlyInterface" { "Signal: $signalFromInterface." }
-				"OnlyScan"      { "Signal: $signalFromNetworks." }
-				"Both"          { "Signal: $signalFromInterface (if.) or $signalFromNetworks (scan)." }
+			# Print, ending with ping 
+			Write-Host -NoNewline "$(Get-LogLineDate) Connected to '$TargetSsid' | "
+
+			if ($SignalStrengthSource -in @("OnlyInterface", "Both") -and $signalFromInterface -ne "N/A") {
+				$percentValue = [int]($signalFromInterface -replace '%', '')
+				Write-Host -NoNewline "Signal: "
+				Write-Host -NoNewline "$signalFromInterface" -ForegroundColor (Get-SignalColor -Value $percentValue -Type "percent")
+				if ($SignalStrengthSource -eq "Both") { Write-Host -NoNewline " (if.)" }
+			}
+			if ($SignalStrengthSource -in @("OnlyScan", "Both") -and $signalFromNetworks -ne "N/A") {
+				if ($SignalStrengthSource -eq "Both") { Write-Host -NoNewline " or " } else { Write-Host -NoNewline "Signal: " }
+				$percentValue = [int]($signalFromNetworks -replace '%', '')
+				Write-Host -NoNewline "$signalFromNetworks" -ForegroundColor (Get-SignalColor -Value $percentValue -Type "percent")
+				if ($SignalStrengthSource -eq "Both") { Write-Host -NoNewline " (scan)" }
+			}
+			Write-Host -NoNewline " | "
+
+			Write-Host -NoNewline "Pinging $TargetIp... "
+			$pingResult = Test-Connection -ComputerName $TargetIp -Count 1 -ErrorAction SilentlyContinue
+			if ($pingResult -and $pingResult.Status -eq 'Success') {
+				$pingColor = if ($pingResult.Latency -lt 30) { "DarkGreen" } elseif ($pingResult.Latency -lt 80) { "Green" } elseif ($pingResult.Latency -lt 150) { "Yellow" } elseif ($pingResult.Latency -lt 300) { "DarkYellow" } elseif ($pingResult.Latency -lt 500) { "DarkRed" } else { "Red" }
+				Write-Host -NoNewline "$($pingResult.Latency)ms".PadLeft(7) -ForegroundColor $pingColor
+				Start-Sleep -Milliseconds $CheckIntervalMilliseconds
+			}
+			else {
+				Write-Host -NoNewline "Timeout" -ForegroundColor Red
 			}
 
 			if ($ShowRemoteSignal) {
-				try {
-					$localMac = ($interfaces | Select-String -Pattern "^\s+Physical address\s+:\s(.+)").Matches[0].Groups[1].Value.Trim().Replace("-", "").Replace(":", "").ToLower()
-					$statusResponse = Invoke-WebRequest -Uri "http://$TargetIp/status?details=1" -TimeoutSec 2 -UseBasicParsing
-					$status = $statusResponse.Content | ConvertFrom-Json
-					$remoteStation = $status.stations | Where-Object { ($_.mac.Replace("-", "").Replace(":", "").ToLower()) -eq $localMac }
-					if ($remoteStation) {
-						$remoteRssi = $remoteStation.rssi
-						$signalText += " Remote RSSI: ${remoteRssi}dBm."
+				Write-Host -NoNewline " | Remote RSSI: "
+				if ($pingResult.Status -eq 'Success') {
+					try {
+						$localMac = ($interfaces | Select-String -Pattern "^\s+Physical address\s+:\s(.+)").Matches[0].Groups[1].Value.Trim().Replace("-", "").Replace(":", "").ToLower()
+						$statusResponse = Invoke-WebRequest -Uri "http://$TargetIp/status?details=1" -TimeoutSec 2 -UseBasicParsing
+						$status = $statusResponse.Content | ConvertFrom-Json
+						$remoteStation = $status.stations | Where-Object { ($_.mac.Replace("-", "").Replace(":", "").ToLower()) -eq $localMac }
+						if ($remoteStation) {
+							$remoteRssi = $remoteStation.rssi
+							Write-Host -NoNewline "${remoteRssi}dBm" -ForegroundColor (Get-SignalColor -Value $remoteRssi -Type "dbm")
+						}
+						else {
+							Write-Host -NoNewline "Missing" -ForegroundColor "DarkGray"
+						}
 					}
-					else {
-						$signalText += " Remote RSSI: Missing."
+					catch {
+						Write-Host -NoNewline "Timeout" -ForegroundColor "Red"
 					}
-				} catch {
-					$signalText += " Remote RSSI: Error."
+				}
+				else { # Ping failed
+					Write-Host -NoNewline "Skipped"
 				}
 			}
 
-			# Print, ending with ping 
-			Write-Host -NoNewline "$(Get-Date -Format 'HH:mm:ss.fff') - Connected to '$TargetSsid'. $signalText Pinging $TargetIp... "
-			$pingResult = Test-Connection -ComputerName $TargetIp -Count 1 -ErrorAction SilentlyContinue
-			if ($pingResult -and $pingResult.Status -eq 'Success') {
-				Write-Host "OK ($($pingResult.Latency)ms)" -ForegroundColor Green
-				Start-Sleep -Milliseconds $CheckIntervalMilliseconds
-			} else {
-				Write-Host "Failed" -ForegroundColor Red
-			}
-		} else {
-			Write-Host -NoNewline "$(Get-Date -Format 'HH:mm:ss.fff') - Not connected to '$TargetSsid'. Attempting to connect... "
+			Write-Host " " # for the new line
+		}
+		else {
+			Write-Host -NoNewline "$(Get-LogLineDate) Not connected to '$TargetSsid'. Attempting to connect... "
 			netsh wlan connect name="$TargetSsid" | Out-Host
 		}
 	}
 	catch {
-		Write-Warning "$(Get-Date -Format 'HH:mm:ss.fff') - An error occurred: $_"
+		Write-Warning "$(Get-LogLineDate) An error occurred: $_"
 	}
 	Start-Sleep -Milliseconds $CheckIntervalMilliseconds
 }
