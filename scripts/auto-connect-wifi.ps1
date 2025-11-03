@@ -47,14 +47,14 @@ while ($true) {
 
 		# Check if connected and if the SSID matches the target
 		if ($connection -and ($connection.Matches[0].Groups[1].Value.Trim() -eq $TargetSsid)) {
-			$signalFromInterface = "N/A"
+			$signalFromInterface = $null
 			if ($SignalStrengthSource -in @("OnlyInterface", "Both")) {
 				# Extracting signal strength; not updating quite fast, only every 60 seconds I think (see https://github.com/microsoft/Windows-Dev-Performance/issues/59)
 				$signal = $interfaces | Select-String -Pattern "^\s+Signal\s+:\s(.+)"
 				$signalFromInterface = if ($signal) { $signal.Matches[0].Groups[1].Value.Trim() } else { "N/A" }
 			}
 
-			$signalFromNetworks = "N/A"
+			$signalFromNetworks = $null
 			if ($SignalStrengthSource -in @("OnlyScan", "Both")) {
 				# Following will maybe force scan
 				$scan = (netsh wlan show networks mode=bssid | Out-String) -split "(?m)(?=^SSID\s+\d+\s*:)" `
@@ -65,13 +65,13 @@ while ($true) {
 			# Print, ending with ping 
 			Write-Host -NoNewline "$(Get-LogLineDate) Connected to '$TargetSsid' | "
 
-			if ($SignalStrengthSource -in @("OnlyInterface", "Both") -and $signalFromInterface -ne "N/A") {
+			if ($SignalStrengthSource -in @("OnlyInterface", "Both") -and $signalFromInterface) {
 				$percentValue = [int]($signalFromInterface -replace '%', '')
 				Write-Host -NoNewline "Signal: "
 				Write-Host -NoNewline "$signalFromInterface" -ForegroundColor (Get-SignalColor -Value $percentValue -Type "percent")
 				if ($SignalStrengthSource -eq "Both") { Write-Host -NoNewline " (if.)" }
 			}
-			if ($SignalStrengthSource -in @("OnlyScan", "Both") -and $signalFromNetworks -ne "N/A") {
+			if ($SignalStrengthSource -in @("OnlyScan", "Both") -and $signalFromNetworks) {
 				if ($SignalStrengthSource -eq "Both") { Write-Host -NoNewline " or " } else { Write-Host -NoNewline "Signal: " }
 				$percentValue = [int]($signalFromNetworks -replace '%', '')
 				Write-Host -NoNewline "$signalFromNetworks" -ForegroundColor (Get-SignalColor -Value $percentValue -Type "percent")
