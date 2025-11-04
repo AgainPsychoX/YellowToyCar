@@ -1984,6 +1984,12 @@ CONFIG_WIFI_PROV_STA_ALL_CHANNEL_SCAN=y
 # end of Wi-Fi Provisioning Manager
 
 #
+# My project configuration
+#
+CONFIG_CAMERA_EXTRA_DEBUG=y
+# end of My project configuration
+
+#
 # Camera configuration
 #
 # CONFIG_OV7670_SUPPORT is not set

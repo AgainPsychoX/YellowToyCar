@@ -407,9 +407,17 @@ esp_err_t config(
 				case fnv1a32("special_effect"):
 					sensor->set_special_effect(sensor, std::atoi(input + value_token->start));
 					break;
+#ifdef CONFIG_CAMERA_EXTRA_DEBUG
 				case fnv1a32("colorbar"):
 					sensor->set_colorbar(sensor, parseBooleanFast(input + value_token->start));
 					break;
+				case fnv1a32("clkrc"):
+					sensor->set_reg(sensor, 0x111, 0xFF, std::atoi(input + value_token->start)); // CLKRC
+					break;
+				case fnv1a32("r_dvp_sp"):
+					sensor->set_reg(sensor, 0x0D3, 0xFF, std::atoi(input + value_token->start)); // R_DVP_SP
+					break;
+#endif
 
 				default:
 					ESP_LOGD(TAG_CONFIG_CAMERA, "Unknown field '%.*s', ignoring.", 
@@ -456,8 +464,13 @@ esp_err_t config(
 				"\"wpc\":%d,"
 				"\"raw_gma\":%d,"
 				"\"lenc\":%d,"
-				"\"special_effect\":%d,"
-				"\"colorbar\":%d"
+				"\"special_effect\":%d"
+#ifdef CONFIG_CAMERA_EXTRA_DEBUG
+				","
+				"\"colorbar\":%d,"
+				"\"clkrc\":%d,"
+				"\"r_dvp_sp\":%d"
+#endif
 			"}",
 			static_cast<uint8_t>(sensor->status.framesize),
 			static_cast<uint8_t>(sensor->pixformat),
@@ -484,8 +497,13 @@ esp_err_t config(
 			sensor->status.wpc,
 			sensor->status.raw_gma,
 			sensor->status.lenc,
-			sensor->status.special_effect,
-			sensor->status.colorbar
+			sensor->status.special_effect
+#ifdef CONFIG_CAMERA_EXTRA_DEBUG
+			,
+			sensor->status.colorbar,
+			sensor->get_reg(sensor, 0x111, 0xFF), // CLKRC (bank 1 - sensor)
+			sensor->get_reg(sensor, 0x0D3, 0xFF)  // R_DVP_SP (bank 0 - DVP)
+#endif
 		);
 	}
 

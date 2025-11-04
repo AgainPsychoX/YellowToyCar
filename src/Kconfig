@@ -1,0 +1,7 @@
+menu "My project configuration"
+
+    config CAMERA_EXTRA_DEBUG
+        bool "Add extra debug code for camera"
+        default y if COMPILER_OPTIMIZATION_LEVEL_DEBUG
+
+endmenu
