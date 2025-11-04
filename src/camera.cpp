@@ -382,13 +382,13 @@ esp_err_t config(
 					sensor->set_whitebal(sensor, parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("awb_gain"):
-					sensor->set_awb_gain(sensor, std::atoi(input + value_token->start));
+					sensor->set_awb_gain(sensor, parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("wb_mode"):
 					sensor->set_wb_mode(sensor, std::atoi(input + value_token->start));
 					break;
 				case fnv1a32("dcw"): // advanced auto white balance 
-					sensor->set_dcw(sensor, std::atoi(input + value_token->start));
+					sensor->set_dcw(sensor, parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("bpc"):
 					sensor->set_bpc(sensor, parseBooleanFast(input + value_token->start));
@@ -396,12 +396,11 @@ esp_err_t config(
 				case fnv1a32("wpc"):
 					sensor->set_wpc(sensor, parseBooleanFast(input + value_token->start));
 					break;
-
 				case fnv1a32("raw_gma"):
-					sensor->set_raw_gma(sensor, std::atoi(input + value_token->start));
+					sensor->set_raw_gma(sensor, parseBooleanFast(input + value_token->start));
 					break;
-				case fnv1a32("lenc"):
-					sensor->set_lenc(sensor, std::atoi(input + value_token->start));
+				case fnv1a32("lenc"): // lens correction
+					sensor->set_lenc(sensor, parseBooleanFast(input + value_token->start));
 					break;
 
 				case fnv1a32("special"):
