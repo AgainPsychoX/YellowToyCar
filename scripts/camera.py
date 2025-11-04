@@ -94,6 +94,8 @@ def handle_mjpeg_stream(args, config):
 			if width * args.scale >= 120:
 				cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 				cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+			if args.always_on_top:
+				cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 			cv2.imshow(window_name, image)
 
 			if args.save:
@@ -117,6 +119,8 @@ def handle_jpeg_frame(args, config):
 		if width * args.scale >= 120:
 			cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 			cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+		if args.always_on_top:
+			cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 
 		cv2.imshow(window_name, image)
 
@@ -181,6 +185,8 @@ def handle_static_size_stream(args, config, pixformat):
 	if width * args.scale >= 120:
 		cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 		cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+	if args.always_on_top:
+		cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 
 	if pixformat == PIXFORMAT_RGB565 or pixformat == PIXFORMAT_YUV422:
 		chunk_size = width * height * 2
@@ -239,6 +245,8 @@ def handle_static_size_frame(args, config, pixformat):
 	if width * args.scale >= 120:
 		cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 		cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+	if args.always_on_top:
+		cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
 
 	response = requests.get(f'http://{args.ip}/capture')
 	if response.status_code == 200:
@@ -280,8 +288,9 @@ def main():
 	parser.add_argument('--save', metavar='PATH', help='If set, specifies path to file (or folder) for the frame (or stream) to be saved.', required=False)
 	parser.add_argument('--save-fps', metavar='FPS', help='If set, limits number of frames being saved.', required=False, type=fps_type)
 	parser.add_argument('--overwrite', help='Allow overwriting existing files (warning: might remove files!)', required=False, action='store_true')
+	parser.add_argument('--always-on-top', help='If set, the window will be always on top.', required=False, action='store_true')
+	parser.add_argument('--fps-window', help='How much seconds behind to be used to calculate average FPS.', required=False, type=float, default=10)
 	args = parser.parse_args()
-	args.fps_window = 10 # how many seconds 
 
 	if args.save:
 		args.save = os.path.normpath(args.save)
