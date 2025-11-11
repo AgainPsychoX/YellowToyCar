@@ -1,6 +1,7 @@
 
 # Private stuff
-private
+private/
+!include/private/
 
 # Platform IO build and dependencies
 .pio

@@ -42,6 +42,9 @@ namespace app::udp {
 	void init();
 	void listen();
 }
+namespace app::debug {
+	void init();
+}
 
 using namespace app;
 
@@ -53,6 +56,7 @@ extern "C" void app_main(void)
 
 	////////////////////////////////////////
 
+	debug::init();
 	hal::init();
 	nvs::init();
 	network::init();
