@@ -398,6 +398,19 @@ Controls:
 
 
 
+### Sockets
+
+<!-- checked at 7ccf05ca30007bb13cbea588c54d167f229d816e --->
+
+| Where | What |
+|:------------------|---------------|
+| `app::httpd::init_httpd_main` via `httpd_server_init` | TCP HTTP listen `server_port = 80` (`fd`);<br> UDP listen `ctrl_port = 32080` (`ctrl_fd`);<br> UDP send to former (`msg_fd`); |
+| `app::httpd::init_httpd_stream` via `httpd_server_init` | TCP HTTP listen `server_port = 81` (`fd`);<br> UDP listen `ctrl_port = 32081` (`ctrl_fd`);<br> UDP send to former (`msg_fd`); |
+| `app::udp::init` | UDP listen `UDP_PORT 83` (`sock`) |
+
+Some services (mDNS, DHCP(S), ICMP) seems to be handled internally in LwIP implementation.
+
+
 
 
 ## Notes
