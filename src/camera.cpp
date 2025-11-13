@@ -292,8 +292,8 @@ esp_err_t config(
 					auto framesize = parse_framesize({input + value_token->start, value_length});
 					if (sensor->status.framesize != framesize) {
 						require_reinit = true;
+						sensor->set_framesize(sensor, framesize);
 					}
-					sensor->set_framesize(sensor, framesize);
 					break;
 				}	
 				case fnv1a32("pixformat"): {
@@ -301,8 +301,8 @@ esp_err_t config(
 					auto pixformat = parse_pixformat({input + value_token->start, value_length});
 					if (sensor->pixformat != pixformat) {
 						require_reinit = true;
+						sensor->set_pixformat(sensor, pixformat);
 					}
-					sensor->set_pixformat(sensor, pixformat);
 					break;
 				}
 				case fnv1a32("quality"): /* for JPEG compression */
