@@ -411,6 +411,9 @@ esp_err_t config(
 				case fnv1a32("colorbar"):
 					sensor->set_colorbar(sensor, parseBooleanFast(input + value_token->start));
 					break;
+				case fnv1a32("xclk"):
+					sensor->set_xclk(sensor, LEDC_TIMER_0, std::atoi(input + value_token->start)); // XVCLK (in MHz)
+					break;
 				case fnv1a32("clkrc"):
 					sensor->set_reg(sensor, 0x111, 0xFF, std::atoi(input + value_token->start)); // CLKRC
 					break;
