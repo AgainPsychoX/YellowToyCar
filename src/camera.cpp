@@ -262,15 +262,22 @@ esp_err_t config(
 		return ESP_FAIL;
 	}
 
-	// Full re-initialization might be required if either of is true:
-	// + pixformat is changed, 
-	// + framesize is changed outside JPEG mode,
-	// + framesize is widened inside JPEG mode,
-	// See comment from the library maintainer https://github.com/espressif/esp32-camera/issues/612#issuecomment-1880837969
-	// and source code of esp32-camera (especially `cam_config` function).
-	bool require_reinit = false;
-
 	if (input) {
+		// Full re-initialization might be required if either of is true:
+		// + pixformat is changed, 
+		// + framesize is changed outside JPEG mode,
+		// + framesize is widened inside JPEG mode,
+		// See comment from the library maintainer https://github.com/espressif/esp32-camera/issues/612#issuecomment-1880837969
+		// and source code of esp32-camera (especially `cam_config` function).
+		bool require_reinit = false;
+
+		// Some parameters are not persisted in NVS and reset by re-initialization, so save them and apply later
+#ifdef CONFIG_CAMERA_EXTRA_DEBUG
+		int xclk_mhz = -1;
+		int clkrc = -1;
+		int r_dvp_sp = -1;
+#endif
+
 		if (unlikely(root->type != JSMN_OBJECT))
 			return ESP_FAIL;
 		if (unlikely(root->size < 1)) 
@@ -412,13 +419,13 @@ esp_err_t config(
 					sensor->set_colorbar(sensor, parseBooleanFast(input + value_token->start));
 					break;
 				case fnv1a32("xclk"):
-					sensor->set_xclk(sensor, LEDC_TIMER_0, std::atoi(input + value_token->start)); // XVCLK (in MHz)
+					xclk_mhz = std::atoi(input + value_token->start);
 					break;
 				case fnv1a32("clkrc"):
-					sensor->set_reg(sensor, 0x111, 0xFF, std::atoi(input + value_token->start)); // CLKRC
+					clkrc = std::atoi(input + value_token->start);
 					break;
 				case fnv1a32("r_dvp_sp"):
-					sensor->set_reg(sensor, 0x0D3, 0xFF, std::atoi(input + value_token->start)); // R_DVP_SP
+					r_dvp_sp = std::atoi(input + value_token->start);
 					break;
 #endif
 
@@ -436,6 +443,19 @@ esp_err_t config(
 		done: /* semicolon for empty statement */ ;
 
 		// TODO: report invalid parameters somehow (i.e. out of bounds contrast/brightness values, invalid framesize etc.)
+
+		esp_camera_save_to_nvs(NVS_CAMERA_NAMESPACE);
+
+		if (require_reinit)
+			reinit();
+#ifdef CONFIG_CAMERA_EXTRA_DEBUG
+		if (xclk_mhz != -1)
+			sensor->set_xclk(sensor, LEDC_TIMER_0, xclk_mhz); // XVCLK (in MHz)
+		if (clkrc != -1)
+			sensor->set_reg(sensor, 0x111, 0xFF, clkrc); // CLKRC
+		if (r_dvp_sp != -1)
+			sensor->set_reg(sensor, 0x0D3, 0xFF, r_dvp_sp); // R_DVP_SP
+#endif
 	}
 
 	if (output_return) {
@@ -508,11 +528,6 @@ esp_err_t config(
 			sensor->get_reg(sensor, 0x0D3, 0xFF)  // R_DVP_SP (bank 0 - DVP)
 #endif
 		);
-	}
-
-	if (require_reinit) {
-		esp_camera_save_to_nvs(NVS_CAMERA_NAMESPACE);
-		reinit();
 	}
 
 	return ESP_OK;
