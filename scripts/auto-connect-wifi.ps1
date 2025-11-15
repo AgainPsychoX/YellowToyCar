@@ -39,6 +39,8 @@ function Get-LogLineDate {
 Write-Host "Starting Wi-Fi auto-connect for SSID: '$TargetSsid'"
 Write-Host "Press CTRL+C to stop."
 
+$firstPingTimeoutTimestamp = $null
+
 while ($true) {
 	try {
 		# Get the current Wi-Fi connection details
@@ -82,12 +84,24 @@ while ($true) {
 			Write-Host -NoNewline "Pinging $TargetIp... "
 			$pingResult = Test-Connection -ComputerName $TargetIp -Count 1 -ErrorAction SilentlyContinue
 			if ($pingResult -and $pingResult.Status -eq 'Success') {
+				$firstPingTimeoutTimestamp = $null
 				$pingColor = if ($pingResult.Latency -lt 30) { "DarkGreen" } elseif ($pingResult.Latency -lt 80) { "Green" } elseif ($pingResult.Latency -lt 150) { "Yellow" } elseif ($pingResult.Latency -lt 300) { "DarkYellow" } elseif ($pingResult.Latency -lt 500) { "DarkRed" } else { "Red" }
 				Write-Host -NoNewline "$($pingResult.Latency)ms".PadLeft(7) -ForegroundColor $pingColor
 				Start-Sleep -Milliseconds $CheckIntervalMilliseconds
 			}
 			else {
 				Write-Host -NoNewline "Timeout" -ForegroundColor Red
+
+				if (-not $firstPingTimeoutTimestamp) {
+					$firstPingTimeoutTimestamp = Get-Date
+				}
+				# Try disconnect when signal stuck while ping timeouts keep happening
+				if (((Get-Date) - $firstPingTimeoutTimestamp).TotalSeconds -ge 5) {
+					Write-Host -NoNewline " | Disconnecting to try refresh..."
+					netsh wlan disconnect | Out-Host
+					$firstPingTimeoutTimestamp = $null
+					continue
+				}
 			}
 
 			if ($ShowRemoteSignal) {
@@ -118,6 +132,7 @@ while ($true) {
 			Write-Host " " # for the new line
 		}
 		else {
+			$firstPingTimeoutTimestamp = $null
 			Write-Host -NoNewline "$(Get-LogLineDate) Not connected to '$TargetSsid'. Attempting to connect... "
 			netsh wlan connect name="$TargetSsid" | Out-Host
 		}
