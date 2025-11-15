@@ -4,14 +4,9 @@ import os
 import itertools
 import argparse
 import requests
+import csv
 import sys
 import subprocess
-
-XCLK_FREQS = [16, 20]  # TODO: add 24 MHz later
-CLOCK_DIVIDERS = [1, 2, 4] # (CLKRC[5:0]+1)
-DOUBLER_MODES = [False, True]  # (CLKRC[7])
-DVP_DIVIDERS = [1, 2, 4, 8] # (R_DVP_SP[6:0])
-DVP_AUTO_MODES = [False, True] # auto DVP division mode (R_DVP_SP[7])
 
 # Resolutions to test
 FRAMESIZE_TO_DIMS = [
@@ -39,10 +34,6 @@ PIXFORMAT = {
 	"JPEG":      4,
 }
 PIXFORMAT_TO_STR = {v: k for k, v in PIXFORMAT.items()}
-
-CAPTURE_DURATION = 5 # seconds
-
-LOG_FILE = "performance_log.md"
 
 # Data from OV2640 datasheet for different modes/resolutions
 # tP = PCLK period
@@ -74,25 +65,38 @@ def calculate_expected_fps(pclk_mhz, width, height):
 
 	return 1e9 / t_frame_ns
 
-def write_log_header():
-	if not os.path.exists(LOG_FILE):
-		with open(LOG_FILE, "w") as f:
-			f.write("# Camera Performance Test Log\n\n")
-			f.write(
-				"| Timestamp | Format | Resolution | XCLK (MHz) | Doubler | CLK Div | DVP Div | DVP Auto | PCLK (MHz) | Expected FPS | Actual FPS | KB/s | Status | Notes |\n"
-			)
-			f.write(
-				"|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-			)
+def calculate_expected_pclk_mhz(xclk, doubler, clk_div, dvp_div):
+	pclk_divisor = clk_div
 
-def log_result(result):
-	with open(LOG_FILE, "a") as f:
-		f.write(
-			f"| {result['timestamp']} | {result['format']} | {result['resolution']} | "
-			f"{result['xclk']} | {result['doubler']} | {result['clk_div']} | "
-			f"{result['dvp_div']} | {result['dvp_auto']} | {result['pclk_mhz']:.2f} | "
-			f"{result['expected_fps']:.2f} | {result['actual_fps']:.2f} | {result['kbs']:.2f} | {result['status']} |  |\n" # Notes empty, to be filled by human later on
-		)
+	# This is an assumption: that DVP divider also affects PCLK speed.
+	# In many cases it might just gate the output without changing frequency.
+	# For this test, we'll assume it divides the clock.
+	dvp_auto = dvp_div == 0
+	if dvp_auto:
+		# Experimentally, it feels like auto often falls back to 2
+		pclk_divisor *= 2
+	else:
+		pclk_divisor *= dvp_div
+
+	return (xclk * (2 if doubler else 1)) / pclk_divisor
+
+def get_log_fieldnames():
+	return [
+		"timestamp", "format", "resolution", "xclk", "doubler",
+		"clk_div", "dvp_div", "pclk_mhz", "expected_fps", "actual_fps",
+		"kbs", "status", "notes"
+	]
+
+def write_log_header(log_file):
+	if not os.path.exists(log_file):
+		with open(log_file, "w", newline="") as f:
+			writer = csv.DictWriter(f, fieldnames=get_log_fieldnames())
+			writer.writeheader()
+
+def log_result(result, log_file):
+	with open(log_file, "a", newline="") as f:
+		writer = csv.DictWriter(f, fieldnames=get_log_fieldnames())
+		writer.writerow(result)
 
 def measure_fps_from_stream(stream_url, pixformat, width, height, capture_duration):
 	frames_captured = 0
@@ -150,32 +154,84 @@ def measure_fps_from_stream(stream_url, pixformat, width, height, capture_durati
 	time.sleep(0.5) # short sleep to make sure the stream is closed
 	return actual_fps, kbs
 
-def run_test(ip_address):
-	"""Main function to run all test combinations."""
-	write_log_header()
+def load_cached_tests(log_file):
+	"""Loads previously run test configurations from the log file to avoid re-running them."""
+	if not os.path.exists(log_file):
+		return {}
 
-	test_combinations = list(itertools.product(
-		list(PIXFORMAT.values()),
-		ALL_RESOLUTION_INDICES,
-		XCLK_FREQS,
-		DOUBLER_MODES,
-		CLOCK_DIVIDERS,
-		DVP_DIVIDERS,
-		DVP_AUTO_MODES
-	))
+	cached_tests = {} # Key -> list of rows
+	with open(log_file, "r", newline="") as f:
+		# Let DictReader use the first row as header
+		reader = csv.DictReader(f)
+		for row in reader:
+			try:
+				# Create a unique key for each test configuration
+				key = (
+					row['format'],
+					row['resolution'],
+					int(float(row['xclk'])), # Handle float format like '16.00'
+					row['doubler'].lower() == 'true',
+					int(row['clk_div']),
+					int(row['dvp_div'])
+				)
+				if key not in cached_tests:
+					cached_tests[key] = []
+				cached_tests[key].append(row)
+			except (KeyError, ValueError) as e:
+				print(f"Warning: Skipping malformed row in cache file: {row} ({e})")
+	return cached_tests
+
+def get_expected_fps_for_combination(combination):
+	"""Calculate the expected FPS for a given test combination tuple."""
+	(pix_str, res, xclk, doubler, clk_div, dvp_div) = combination
+	width, height = FRAMESIZE_TO_DIMS[res]
+	expected_pclk_mhz = calculate_expected_pclk_mhz(xclk, doubler, clk_div, dvp_div)
+	return calculate_expected_fps(expected_pclk_mhz, width, height)
+
+def run_test(args):
+	"""Main function to run all test combinations."""
+	write_log_header(args.log_file)
+	
+	cached_tests = {}
+	if not args.no_cache:
+		cached_tests = load_cached_tests(args.log_file)
+		if cached_tests:
+			print(f"Loaded {len(cached_tests)} previously completed tests from {args.log_file}.")
+	
+	# Generate all combinations for the run
+	all_combinations = list(itertools.product(args.pixformat, args.resolution, args.xclk, args.doubler, args.clk_div, args.dvp_div))
+
+	# Sort combinations by expected FPS in descending order to prioritize high-performance tests
+	test_combinations = sorted(all_combinations, key=get_expected_fps_for_combination, reverse=True)
 
 	total_tests = len(test_combinations)
-	print(f"Starting camera performance test with {total_tests} combinations.")
-	print(f"Target device IP: {ip_address}")
+	print(f"Starting camera performance testing with {total_tests} combinations.")
+	print(f"Target device IP: {args.ip}")
 
-	for i, (pix, res, xclk, doubler, clk_div, dvp_div, dvp_auto) in enumerate(test_combinations):
+	for i, (pix_str, res, xclk, doubler, clk_div, dvp_div) in enumerate(test_combinations):
+		pix = PIXFORMAT[pix_str]
+		dvp_auto = dvp_div == 0
 
 		width, height = FRAMESIZE_TO_DIMS[res]
 		pix_str = PIXFORMAT_TO_STR[pix]
 		res_str = f"{width}x{height}"
-		
-		print(f"\n--- Test {i+1}/{total_tests} ---")
-		print(f"Config: Res={res_str}, Fmt={pix_str}, XCLK={xclk}MHz, Doubler={doubler}, CLK_Div={clk_div}, DVP_Div={dvp_div}, DVP_Auto={dvp_auto}")
+
+		# Calculate expected FPS for the current combination
+		expected_pclk_mhz = calculate_expected_pclk_mhz(xclk, doubler, clk_div, dvp_div)
+		expected_fps = calculate_expected_fps(expected_pclk_mhz, width, height)
+
+		config_str = f"{res_str:<9} {pix_str} XCLK={xclk}MHz x2={doubler:0} div={clk_div} DVP_div={dvp_div if not dvp_auto else 'auto':<4} -> Expected FPS: {expected_fps:.2f})"
+		print(f"[{i+1:4d}/{total_tests}] {config_str} ... ", end='', flush=True)
+
+		# Caching check
+		test_key = (pix_str, res_str, xclk, doubler, clk_div, dvp_div)
+		if test_key in cached_tests:
+			last_result = cached_tests[test_key][-1]
+			is_failed = last_result['status'].startswith('FAIL')
+			# Skip if not retrying fails, or if retrying fails and the test was not a failure.
+			if not (args.retry_fails and is_failed):
+				print(f"[CACHED] [{last_result['status']}] Actual FPS: {last_result['actual_fps']}, KB/s: {last_result['kbs']}")
+				continue
 
 		result = {
 			"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -185,12 +241,12 @@ def run_test(ip_address):
 			"doubler": doubler,
 			"clk_div": clk_div,
 			"dvp_div": dvp_div,
-			"dvp_auto": dvp_auto,
-			"pclk_mhz": 0,
-			"expected_fps": 0,
+			"pclk_mhz": expected_pclk_mhz,
+			"expected_fps": expected_fps,
 			"actual_fps": 0.0,
 			"kbs": 0.0,
-			"status": "SKIPPED"
+			"status": "",
+			"notes": ""
 		}
 
 		try:
@@ -201,7 +257,7 @@ def run_test(ip_address):
 
 			# R_DVP_SP: DVP output speed control
 			# Bit 7: Auto mode, Bits 6:0: Divider
-			dvp_sp_val = (0b10000000 if dvp_auto else 0) | dvp_div
+			dvp_sp_val = (0b10000000 if dvp_auto else 0) | (8 if dvp_auto else dvp_div)
 
 			# --- Configure Camera via HTTP POST ---
 			config_payload = {
@@ -216,15 +272,14 @@ def run_test(ip_address):
 			if pix == PIXFORMAT["JPEG"]:
 				config_payload["camera"]["quality"] = 12
 
-			response = requests.post(f"http://{ip_address}/config", json=config_payload, timeout=5)
+			response = requests.post(f"http://{args.ip}/config", json=config_payload, timeout=2)
 			response.raise_for_status() # Will raise an exception for 4xx/5xx status
 
 			# --- Verify Configuration ---
 			# Wait a moment for settings to apply, especially if a re-init is triggered.
 			time.sleep(1)
 
-			print("Verifying applied configuration...")
-			verify_response = requests.get(f"http://{ip_address}/config", timeout=5)
+			verify_response = requests.get(f"http://{args.ip}/config", timeout=2)
 			verify_response.raise_for_status()
 			current_config = verify_response.json()
 
@@ -248,55 +303,68 @@ def run_test(ip_address):
 			if mismatches:
 				raise RuntimeError(f"Config mismatch! Issues: {', '.join(mismatches)}")
 
-			print("Configuration verified successfully.")
-			
-
-			# --- Calculations ---
-			# PCLK = (XCLK * (2 if doubler else 1)) / CLK_DIV
-			# The DVP divider seems to be for the output pins, not the internal PCLK.
-			# If DVP Auto is on, the DVP divider is ignored.
-			pclk_divisor = clk_div
-			if not dvp_auto:
-				# This is an assumption: that DVP divider also affects PCLK speed.
-				# In many cases it might just gate the output without changing frequency.
-				# For this test, we'll assume it divides the clock.
-				pclk_divisor *= dvp_div
-
-			result["pclk_mhz"] = (xclk * (2 if doubler else 1)) / pclk_divisor
-			result["expected_fps"] = calculate_expected_fps(result["pclk_mhz"], width, height)
-
 			# --- Measure Actual FPS from Stream ---
-			print(f"Capturing frames for {CAPTURE_DURATION} seconds to measure FPS...")
-			result["actual_fps"], result["kbs"] = measure_fps_from_stream(f"http://{ip_address}:81/stream", pix, width, height, CAPTURE_DURATION)
+			result["actual_fps"], result["kbs"] = measure_fps_from_stream(f"http://{args.ip}:81/stream", pix, width, height, args.duration)
 			result["status"] = "OK"
-			
-			print(f"Success! Actual FPS: {result['actual_fps']:.2f}, KB/s: {result['kbs']:.2f}")
+
+			print(f"[OK] Actual FPS: {result['actual_fps']:.2f}, KB/s: {result['kbs']:.2f}")
 
 		except Exception as e:
-			print(f"Error during test: {e}")
 			result["status"] = f"FAIL: {e}"
 
 			# Try make sure we are still connected
 			time.sleep(1)
-			param_to_set_count = '-n' if sys.platform.lower() == 'win32' else '-c'
-			command = ['ping', param_to_set_count, '1', ip_address]
+			ping_param = '-n' if sys.platform.lower() == 'win32' else '-c'
+			ping_command = ['ping', ping_param, '1', '-w', '2000', args.ip]
 			for _ in range(10): # try few times
-				# Using subprocess to execute the command and hide output
-				ping_process = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+				ping_process = subprocess.run(ping_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 				if ping_process.returncode == 0:
 					break
-			if ping_process.returncode != 0:
-				print("Device did not respond to ICMP ping after error. Aborting test run.")
+			else:
+				print(f"\nDevice did not respond to ICMP ping after error. Aborting test run. Error: {e}")
+				return
+
+			print(f"[FAIL] Error: {e}")
+			if args.stop_on_fail:
+				print("\nAborting test run.")
+				# The 'finally' block will log the result before exiting.
 				return
 
 		finally:
-			log_result(result)
+			if result["status"]:
+				# Format floating point numbers for consistent output before logging
+				result_to_write = result.copy()
+				result_to_write['pclk_mhz'] = f"{result['pclk_mhz']:.2f}"
+				result_to_write['expected_fps'] = f"{result['expected_fps']:.2f}"
+				result_to_write['actual_fps'] = f"{result['actual_fps']:.2f}"
+				result_to_write['kbs'] = f"{result['kbs']:.2f}"
+				log_result(result_to_write, args.log_file)
 
 	print("\nAll tests completed.")
-	print(f"Results saved to {LOG_FILE}")
+	print(f"Results saved to {args.log_file}")
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Camera performance testing script.')
-	parser.add_argument('--ip', default='192.168.4.1', help='IP address of the ESP32 camera device.')
+	parser.add_argument('--ip', help='IP address of the ESP32 camera device. (default: 192.168.4.1)', default='192.168.4.1')
+	parser.add_argument('--log-file', help='Path to the CSV log file. (default: performance_log.csv)', default='performance_log.csv')
+	parser.add_argument('--duration', help='Duration in seconds to capture the stream for FPS measurement. (default: 5)', type=int, default=5)
+	parser.add_argument('--no-cache', help='Do not use cached results; re-run all specified tests.', action='store_true')
+	parser.add_argument('--stop-on-fail', help='Stop the test run on the first failure.', action='store_true')
+	parser.add_argument('--retry-fails', help='Only run tests that have a "FAIL" status in the log file.', action='store_true')
+
+	# Arguments for each test parameter
+	parser.add_argument('--pixformat', help='Pixel formats to test. (default: all)',
+		nargs='+', choices=list(PIXFORMAT.keys()), default=list(PIXFORMAT.keys()))
+	parser.add_argument('--resolution', help='Resolution indices to test. (default: all)',
+		nargs='+', type=int, choices=range(len(FRAMESIZE_TO_DIMS)), metavar=f'[0-{len(FRAMESIZE_TO_DIMS)-1}]', default=range(len(FRAMESIZE_TO_DIMS)))
+	parser.add_argument('--xclk', help='XCLK frequencies (MHz) to test. (default: [16, 20])',
+		nargs='+', type=int, choices=[16, 20, 24], default=[16, 20])
+	parser.add_argument('--doubler', help='Doubler modes (True/False) to test. (default: [False, True])',
+		nargs='+', type=lambda x: x.lower() in ['true', '1', 't', 'y'], default=[False, True])
+	parser.add_argument('--clk-div', help='Clock dividers to test. (default: [1, 2, 4])',
+		nargs='+', type=int, choices=[1, 2, 4], default=[1, 2, 4])
+	parser.add_argument('--dvp-div', help='DVP dividers to test. Use 0 for auto mode. (default: [0, 1, 2, 4, 8])',
+		nargs='+', type=int, choices=[0, 1, 2, 4, 8], default=[0, 1, 2, 4, 8])
+
 	args = parser.parse_args()
-	run_test(args.ip)
+	run_test(args)
