@@ -232,6 +232,7 @@ framesize_t parse_framesize(std::string_view sv)
 	switch (fnv1a32i(sv)) {
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_96X96)>.data()):   case fnv1a32i("96x96"):                             return FRAMESIZE_96X96;
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_QQVGA)>.data()):   case fnv1a32i("160x120"):   case fnv1a32i("QQVGA"): return FRAMESIZE_QQVGA;
+		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_128X128)>.data()): case fnv1a32i("128x128"):                           return FRAMESIZE_128X128;
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_QCIF)>.data()):    case fnv1a32i("176x144"):   case fnv1a32i("QCIF"):  return FRAMESIZE_QCIF;
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_HQVGA)>.data()):   case fnv1a32i("240x176"):   case fnv1a32i("HQVGA"): return FRAMESIZE_HQVGA;
 		case fnv1a32i(to_string<static_cast<uint32_t>(FRAMESIZE_240X240)>.data()): case fnv1a32i("240x240"):                           return FRAMESIZE_240X240;
