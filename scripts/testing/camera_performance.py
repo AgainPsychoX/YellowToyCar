@@ -114,9 +114,8 @@ def ping_device(ip: str) -> bool:
 	ping_process = subprocess.run(ping_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 	return ping_process.returncode == 0
 
-def wait_for_device(ip: str, retries: int = 10, initial_delay: float = 1.0, progress_print = '.') -> bool:
+def wait_for_device(ip: str, retries: int = 10, progress_print = None) -> bool:
 	"""Waits for a device to become reachable via ping."""
-	time.sleep(initial_delay)
 	for i in range(retries):
 		if progress_print and i > 0:
 			print(progress_print, end="", flush=True)
@@ -124,14 +123,16 @@ def wait_for_device(ip: str, retries: int = 10, initial_delay: float = 1.0, prog
 			return True
 	return False
 
-def restart_device(ip: str):
-	print("\t- Restarting device...")
-	try:
-		requests.post(f"http://{ip}/config", json={"restart": True}, timeout=2)
-	except requests.exceptions.RequestException:
-		# A response is not expected as the device restarts immediately.
-		# This exception is normal.
-		pass
+def restart_device(ip: str, wait_icmp: int = 10, wait_extra: float = 2, progress_print = None):
+	response = requests.post(f"http://{ip}/config", json={"restart": True}, timeout=2)
+	response.raise_for_status()
+	time.sleep(1) # avoid successful ping while restart request is being processed
+
+	if not wait_for_device(ip, retries=wait_icmp, progress_print=progress_print):
+		return False
+
+	time.sleep(wait_extra)
+	return True
 
 def measure_fps_from_stream(stream_url, pixformat, width, height, capture_duration):
 	frames_captured = 0
@@ -241,6 +242,32 @@ def run_test(args):
 
 	total_tests = len(test_combinations)
 
+	# Check if the camera config is empty, which might indicate a sensor crash.
+	# If so, try to restart the device.
+	try:
+		config_response = requests.get(f"http://{args.ip}/config", timeout=2)
+		config_response.raise_for_status()
+		current_config = config_response.json()
+		if not current_config.get("camera"):
+			print("Camera config is empty, likely sensor crash.")
+
+			# Try restarting the device
+			print("Restarting device...", end='', flush=True)
+			if not restart_device(args.ip, progress_print='.'):
+				print("Device did not come back online after restart.")
+				return
+			print() # new line
+
+			# Check config again after restart
+			config_response = requests.get(f"http://{args.ip}/config", timeout=2)
+			config_response.raise_for_status()
+			if not config_response.json().get("camera"):
+				print("Camera config still empty after restart. Try hardware restart!")
+				return False
+	except requests.exceptions.RequestException:
+		print("Device did not respond to GET /config properly")
+		return False
+
 	# Get initial uptime
 	try:
 		print(f"Connecting to device at {args.ip} to get initial status...")
@@ -249,8 +276,9 @@ def run_test(args):
 		last_known_uptime = status_response.json().get("uptime", 0)
 		print(f"Initial device uptime: {last_known_uptime / 1000000:.3f}s")
 	except requests.exceptions.RequestException as e:
-		print(f"Error getting initial status: {e}. Aborting.")
-		return
+		print(f"Error getting initial status: {e}.")
+		return False
+
 	print(f"Starting camera performance testing with {total_tests} combinations.")
 	print(f"Target device IP: {args.ip}")
 
@@ -276,7 +304,10 @@ def run_test(args):
 			is_failed = last_result['status'].startswith('FAIL')
 			# Skip if not retrying fails, or if retrying fails and the test was not a failure.
 			if not (args.retry_fails and is_failed):
-				print(f"[CACHED] [{last_result['status']}] Actual FPS: {last_result['actual_fps']}, KB/s: {last_result['kbs']}")
+				if last_result['status'].startswith('OK'):
+					print(f"[CACHED] [{last_result['status']}] Actual FPS: {last_result['actual_fps']}, KB/s: {last_result['kbs']}")
+				else:
+					print(f"[CACHED] [{last_result['status']}]")
 				continue
 
 		result = {
@@ -362,7 +393,7 @@ def run_test(args):
 		except KeyboardInterrupt:
 			result["status"] = "INTERRUPTED"
 			print("Aborting test run due to keyboard interrupt.")
-			return
+			return True
 
 		except Exception as e:
 			error_msg = str(e)
@@ -383,14 +414,12 @@ def run_test(args):
 
 			try:
 				# After a failure, check if the device is still responsive.
-				if not wait_for_device(args.ip, retries=10, initial_delay=0, progress_print=None):
+				if not wait_for_device(args.ip):
 					extra = "Device did not respond to ICMP ping after error."
 					result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
-					print(f"[FATAL] {extra}\nAborting test run.", end='', flush=True)
-					return
-
-				# Small delay to allow the HTTP server to get up
-				time.sleep(1)
+					print(f"[FATAL] {extra}", end='', flush=True)
+					return False
+				time.sleep(1) # small delay to allow the HTTP server to get up
 
 				# Check for crash by comparing uptime
 				try:
@@ -405,18 +434,55 @@ def run_test(args):
 				except requests.exceptions.RequestException:
 					extra = "Device did not respond to GET /status after error."
 					result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
-					print(f"[FATAL] {extra}\nAborting test run.", end='', flush=True)
-					return
+					print(f"[FATAL] {extra}", end='', flush=True)
+					return False
+				
+				# Check if the camera config is empty, which might indicate a sensor crash.
+				# If so, try to restart the device.
+				try:
+					config_response = requests.get(f"http://{args.ip}/config", timeout=2)
+					config_response.raise_for_status()
+					current_config = config_response.json()
+					if not current_config.get("camera"):
+						extra = "Camera config is empty, likely sensor crash."
+						result["status"] += f" - {extra}"
+						print(f"- {extra}", end='', flush=True)
+
+						# Try restarting the device
+						print("Restarting device...", end='', flush=True)
+						if not restart_device(args.ip, progress_print='.'):
+							extra = "Device did not come back online after restart."
+							result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
+							print(f"[FATAL] {extra}", end='', flush=True)
+							return False
+
+						# After restart, update last_known_uptime
+						status_response = requests.get(f"http://{args.ip}/status", timeout=2)
+						status_response.raise_for_status()
+						last_known_uptime = status_response.json().get("uptime", 0)
+
+						# Check config again after restart
+						config_response = requests.get(f"http://{args.ip}/config", timeout=2)
+						config_response.raise_for_status()
+						if not config_response.json().get("camera"):
+							extra = "Camera config still empty after restart."
+							result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
+							print(f"[FATAL] {extra}", end='', flush=True)
+							return False
+				except requests.exceptions.RequestException:
+					extra = "Device did not respond to GET /config after error."
+					result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
+					print(f"[FATAL] {extra}", end='', flush=True)
+					return False
 
 				if args.stop_on_fail:
 					print("\nAborting test run due to --stop-on-fail.", end='', flush=True)
-					# The 'finally' block will log the result before exiting.
-					return
+					return True
 
 			except KeyboardInterrupt:
 				result["status"] += " (and interrupted)"
 				print("\nAborting test (just after failure) run due to keyboard interrupt.", end='', flush=True)
-				return
+				return True
 
 			finally:
 				print() # new line
@@ -431,7 +497,7 @@ def run_test(args):
 				log_result(result, args.log_file)
 
 	print("\nAll tests completed.")
-	print(f"Results saved to {args.log_file}")
+	return True
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Camera performance testing script.')
@@ -457,4 +523,5 @@ if __name__ == "__main__":
 		nargs='+', type=int, choices=[0, 1, 2, 4, 8], default=[0, 1, 2, 4, 8])
 
 	args = parser.parse_args()
-	run_test(args)
+	if not run_test(args):
+		print("Test run failed.")
