@@ -38,6 +38,13 @@ PIXFORMAT = {
 }
 PIXFORMAT_TO_STR = {v: k for k, v in PIXFORMAT.items()}
 
+class TsvNoQuoteDialect(csv.Dialect):
+	delimiter = '\t'
+	quoting = csv.QUOTE_NONE # to make JSON easier to copy
+	escapechar = '\\'
+	lineterminator = '\n'
+csv.register_dialect('tsv-noquote', TsvNoQuoteDialect)
+
 # Data from OV2640 datasheet for different modes/resolutions
 # tP = PCLK period
 TIMING_DATA = {
@@ -93,13 +100,11 @@ def get_log_fieldnames():
 def write_log_header(log_file):
 	if not os.path.exists(log_file):
 		with open(log_file, "w", newline="") as f:
-			writer = csv.DictWriter(f, fieldnames=get_log_fieldnames())
-			writer.writeheader()
+			csv.DictWriter(f, fieldnames=get_log_fieldnames(), dialect='tsv-noquote').writeheader()
 
 def log_result(result, log_file):
 	with open(log_file, "a", newline="") as f:
-		writer = csv.DictWriter(f, fieldnames=get_log_fieldnames())
-		writer.writerow(result)
+		csv.DictWriter(f, fieldnames=get_log_fieldnames(), dialect='tsv-noquote').writerow(result)
 
 def ping_device(ip: str) -> bool:
 	"""Pings a device once to see if it is reachable."""
@@ -192,7 +197,7 @@ def load_cached_tests(log_file):
 	cached_tests = {} # Key -> list of rows
 	with open(log_file, "r", newline="") as f:
 		# Let DictReader use the first row as header
-		reader = csv.DictReader(f)
+		reader = csv.DictReader(f, dialect='tsv-noquote')
 		for row in reader:
 			try:
 				# Create a unique key for each test configuration
@@ -418,13 +423,12 @@ def run_test(args):
 
 		finally:
 			if result["status"]:
-				# Format floating point numbers for consistent output before logging
-				result_to_write = result.copy()
-				result_to_write['pclk_mhz'] = f"{result['pclk_mhz']:.2f}"
-				result_to_write['expected_fps'] = f"{result['expected_fps']:.2f}"
-				result_to_write['actual_fps'] = f"{result['actual_fps']:.2f}"
-				result_to_write['kbs'] = f"{result['kbs']:.2f}"
-				log_result(result_to_write, args.log_file)
+				# Format floating point numbers for consistent output before logging.
+				result['pclk_mhz'] = f"{result['pclk_mhz']:.2f}"
+				result['expected_fps'] = f"{result['expected_fps']:.2f}"
+				result['actual_fps'] = f"{result['actual_fps']:.2f}"
+				result['kbs'] = f"{result['kbs']:.2f}"
+				log_result(result, args.log_file)
 
 	print("\nAll tests completed.")
 	print(f"Results saved to {args.log_file}")
@@ -432,7 +436,7 @@ def run_test(args):
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Camera performance testing script.')
 	parser.add_argument('--ip', help='IP address of the ESP32 camera device. (default: 192.168.4.1)', default='192.168.4.1')
-	parser.add_argument('--log-file', help='Path to the CSV log file. (default: performance_log.csv)', default='performance_log.csv')
+	parser.add_argument('--log-file', help='Path to the TSV log file. (default: performance_log.tsv)', default='performance_log.tsv')
 	parser.add_argument('--duration', help='Duration in seconds to capture the stream for FPS measurement. (default: 5)', type=int, default=5)
 	parser.add_argument('--no-cache', help='Do not use cached results; re-run all specified tests.', action='store_true')
 	parser.add_argument('--stop-on-fail', help='Stop the test run on the first failure.', action='store_true')
