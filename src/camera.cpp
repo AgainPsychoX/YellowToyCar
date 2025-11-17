@@ -106,10 +106,25 @@ esp_err_t my_esp_camera_init(
 		.conv_mode = CONV_DISABLE,
 #endif
 	};
-	return esp_camera_init(&camera_config);
+	
+	ESP_LOGD(TAG_CAMERA, "init: pixformat=%d framesize=%d", 
+		static_cast<int>(pixformat), static_cast<int>(framesize));
+
+	esp_err_t err = esp_camera_init(&camera_config);
+	if (err != ESP_OK) return err;
+
+	// TODO: figure out best registers settings for best FPS, try understand why it works so hit-or-miss
+	// sensor_t* sensor = esp_camera_sensor_get();
+	// if (!sensor) return ESP_FAIL;	
+	// sensor->set_reg(sensor, 0x111, 0xFF, 0b10000000); // CLKRC doubling enabled
+	// sensor->set_reg(sensor, 0x0D3, 0xFF, 0b00000010); // R_DVP_SP minimal div seems to be 2
+
+	return ESP_OK;
 }
 
 #define NVS_CAMERA_NAMESPACE "camera"
+
+#define CONFIG_CAMERA_SKIP_TEST_AFTER_INIT
 
 /// Initializes the camera module. Can be called again to reinitialize, required for finalizing applying some settings,
 /// like pixel format & framesize changes, which might affect frame buffers sizes. A bit bad driver complexity...
@@ -127,11 +142,13 @@ esp_err_t init()
 		ESP_LOGD(TAG_CAMERA, "failed to get camera handle, need to initialize first before loading from NVS");
 		ESP_ERROR_CHECK_OR_GOTO(fatal, my_esp_camera_init()); // with most default/safe settings
 
+#ifndef CONFIG_CAMERA_SKIP_TEST_AFTER_INIT
 		ESP_LOGD(TAG_CAMERA, "testing default settings");
 		if (!check_can_take_picture()) { 
 			// (error logged inside the function)
 			goto fatal;
 		}
+#endif
 
 		ESP_LOGD(TAG_CAMERA, "loading settings from NVS to get some params required for target init");
 		ESP_ERROR_CHECK_OR_GOTO(fail, esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE));
@@ -159,11 +176,13 @@ esp_err_t init()
 	ESP_ERROR_CHECK_OR_GOTO(fail, esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE));
 	// (error logged inside the function)
 
+#ifndef CONFIG_CAMERA_SKIP_TEST_AFTER_INIT
 	ESP_LOGD(TAG_CAMERA, "testing after reinit");
 	if (!check_can_take_picture()) { 
 		// (error logged inside the function)
 		goto fail;
 	}
+#endif
 
 	return ESP_OK;
 
@@ -176,11 +195,13 @@ fail:
 	ESP_LOGD(TAG_CAMERA, "deinit finished, calling init");
 	ESP_ERROR_CHECK_OR_GOTO(fatal, my_esp_camera_init()); // with most default/safe settings
 
+#ifndef CONFIG_CAMERA_SKIP_TEST_AFTER_INIT
 	ESP_LOGD(TAG_CAMERA, "testing default settings");
 	if (!check_can_take_picture()) { 
 		// (error logged inside the function)
 		goto fatal;
 	}
+#endif
 	return ESP_ERR_NOT_FINISHED;
 
 fatal:
