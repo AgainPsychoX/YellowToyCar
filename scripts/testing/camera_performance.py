@@ -304,10 +304,10 @@ def run_test(args):
 			is_failed = last_result['status'].startswith('FAIL')
 			# Skip if not retrying fails, or if retrying fails and the test was not a failure.
 			if not (args.retry_fails and is_failed):
-				if last_result['status'].startswith('OK'):
-					print(f"[CACHED] [{last_result['status']}] Actual FPS: {last_result['actual_fps']}, KB/s: {last_result['kbs']}")
-				else:
-					print(f"[CACHED] [{last_result['status']}]")
+				# if last_result['status'].startswith('OK'):
+				# 	print(f"[CACHED] [{last_result['status']}] Actual FPS: {last_result['actual_fps']}, KB/s: {last_result['kbs']}")
+				# else:
+				# 	print(f"[CACHED] [{last_result['status']}]")
 				continue
 
 		result = {
@@ -449,7 +449,7 @@ def run_test(args):
 						print(f"- {extra}", end='', flush=True)
 
 						# Try restarting the device
-						print("Restarting device...", end='', flush=True)
+						print(" Restarting device...", end='', flush=True)
 						if not restart_device(args.ip, progress_print='.'):
 							extra = "Device did not come back online after restart."
 							result["status"] += f" - {extra}"
