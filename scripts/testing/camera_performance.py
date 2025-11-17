@@ -8,6 +8,8 @@ import csv
 import sys
 import subprocess
 
+class CameraConfigEmptyError(RuntimeError): ... # might indicate sensor crash
+
 # Resolutions to test
 FRAMESIZE_TO_DIMS = [
 	(96, 96),      # 0: FRAMESIZE_96X96
@@ -98,6 +100,33 @@ def log_result(result, log_file):
 	with open(log_file, "a", newline="") as f:
 		writer = csv.DictWriter(f, fieldnames=get_log_fieldnames())
 		writer.writerow(result)
+
+def ping_device(ip: str) -> bool:
+	"""Pings a device once to see if it is reachable."""
+	count_param = '-n' if sys.platform.lower() == 'win32' else '-c'
+	timeout_value = '1000' if sys.platform.lower() == 'win32' else '1'
+	ping_command = ['ping', count_param, '1', '-w', timeout_value, ip]
+	ping_process = subprocess.run(ping_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+	return ping_process.returncode == 0
+
+def wait_for_device(ip: str, retries: int = 10, initial_delay: float = 1.0, progress_print = '.') -> bool:
+	"""Waits for a device to become reachable via ping."""
+	time.sleep(initial_delay)
+	for i in range(retries):
+		if progress_print and i > 0:
+			print(progress_print, end="", flush=True)
+		if ping_device(ip):
+			return True
+	return False
+
+def restart_device(ip: str):
+	print("\t- Restarting device...")
+	try:
+		requests.post(f"http://{ip}/config", json={"restart": True}, timeout=2)
+	except requests.exceptions.RequestException:
+		# A response is not expected as the device restarts immediately.
+		# This exception is normal.
+		pass
 
 def measure_fps_from_stream(stream_url, pixformat, width, height, capture_duration):
 	frames_captured = 0
@@ -206,6 +235,17 @@ def run_test(args):
 	test_combinations = sorted(all_combinations, key=get_expected_fps_for_combination, reverse=True)
 
 	total_tests = len(test_combinations)
+
+	# Get initial uptime
+	try:
+		print(f"Connecting to device at {args.ip} to get initial status...")
+		status_response = requests.get(f"http://{args.ip}/status", timeout=2)
+		status_response.raise_for_status()
+		last_known_uptime = status_response.json().get("uptime", 0)
+		print(f"Initial device uptime: {last_known_uptime / 1000000:.3f}s")
+	except requests.exceptions.RequestException as e:
+		print(f"Error getting initial status: {e}. Aborting.")
+		return
 	print(f"Starting camera performance testing with {total_tests} combinations.")
 	print(f"Target device IP: {args.ip}")
 
@@ -246,7 +286,7 @@ def run_test(args):
 			"expected_fps": expected_fps,
 			"actual_fps": 0.0,
 			"kbs": 0.0,
-			"status": "",
+			"status": "", # starts with `OK: `, `FAIL: ` or `FATAL: ` (non-recoverable)
 			"notes": ""
 		}
 
@@ -284,6 +324,10 @@ def run_test(args):
 			verify_response.raise_for_status()
 			current_config = verify_response.json()
 
+			# Check if camera config is empty, which might indicate the sensor crash
+			if not current_config.get("camera"):
+				raise CameraConfigEmptyError
+
 			# Check if the key values match what we set.
 			# Note: The device might not support reading back all values,
 			# so we only check the ones we know are readable from camera.cpp.
@@ -310,26 +354,67 @@ def run_test(args):
 
 			print(f"[OK] Actual FPS: {result['actual_fps']:.2f}, KB/s: {result['kbs']:.2f}")
 
+		except KeyboardInterrupt:
+			result["status"] = "INTERRUPTED"
+			print("Aborting test run due to keyboard interrupt.")
+			return
+
 		except Exception as e:
-			result["status"] = f"FAIL: {e}"
+			error_msg = str(e)
 
-			# Try make sure we are still connected
-			time.sleep(1)
-			ping_param = '-n' if sys.platform.lower() == 'win32' else '-c'
-			ping_command = ['ping', ping_param, '1', '-w', '2000', args.ip]
-			for _ in range(10): # try few times
-				ping_process = subprocess.run(ping_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-				if ping_process.returncode == 0:
-					break
-			else:
-				print(f"\nDevice did not respond to ICMP ping after error. Aborting test run. Error: {e}")
+			# Check if it's a requests exception and has a request object to add more context
+			if isinstance(e, requests.exceptions.RequestException) and e.request:
+				req = e.request
+				data_info = ""
+				if req.body:
+					try:
+						data_info = req.body.decode('utf-8')
+					except UnicodeDecodeError:
+						data_info = f"{req.body!r}"
+				error_msg = f"{e} ({req.method} {req.url} with data: {data_info})"
+
+			result["status"] = f"FAIL: {error_msg}"
+			print(f"[FAIL] {error_msg} ", end='', flush=True)
+
+			try:
+				# After a failure, check if the device is still responsive.
+				if not wait_for_device(args.ip, retries=10, initial_delay=0, progress_print=None):
+					extra = "Device did not respond to ICMP ping after error."
+					result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
+					print(f"[FATAL] {extra}\nAborting test run.", end='', flush=True)
+					return
+
+				# Small delay to allow the HTTP server to get up
+				time.sleep(1)
+
+				# Check for crash by comparing uptime
+				try:
+					status_response = requests.get(f"http://{args.ip}/status", timeout=2)
+					status_response.raise_for_status()
+					current_uptime = status_response.json().get("uptime", 0)
+					if current_uptime < last_known_uptime:
+						extra = "Device crashed and rebooted."
+						result["status"] += f" - {extra}"
+						print(f"- {extra}", end='', flush=True)
+					last_known_uptime = current_uptime # Update uptime for next check
+				except requests.exceptions.RequestException:
+					extra = "Device did not respond to GET /status after error."
+					result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
+					print(f"[FATAL] {extra}\nAborting test run.", end='', flush=True)
+					return
+
+				if args.stop_on_fail:
+					print("\nAborting test run due to --stop-on-fail.", end='', flush=True)
+					# The 'finally' block will log the result before exiting.
+					return
+
+			except KeyboardInterrupt:
+				result["status"] += " (and interrupted)"
+				print("\nAborting test (just after failure) run due to keyboard interrupt.", end='', flush=True)
 				return
 
-			print(f"[FAIL] Error: {e}")
-			if args.stop_on_fail:
-				print("\nAborting test run.")
-				# The 'finally' block will log the result before exiting.
-				return
+			finally:
+				print() # new line
 
 		finally:
 			if result["status"]:
