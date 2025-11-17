@@ -56,10 +56,13 @@ bool check_can_take_picture()
 
 #include "camera_pins.hpp"
 
+constexpr pixformat_t KNOWN_GOOD_PIXFORMAT = PIXFORMAT_JPEG; // For most common applications
+constexpr framesize_t KNOWN_GOOD_FRAMESIZE = FRAMESIZE_UXGA; // Max for OV2640
+
 /// Initializes the camera module using common config.
 esp_err_t my_esp_camera_init(
-	pixformat_t pixformat = PIXFORMAT_JPEG, // For most common applications
-	framesize_t framesize = FRAMESIZE_UXGA  // Max for OV2640
+	pixformat_t pixformat = KNOWN_GOOD_PIXFORMAT, 
+	framesize_t framesize = KNOWN_GOOD_FRAMESIZE  
 ) {
 	camera_config_t camera_config = {
 		.pin_pwdn  = CAM_PIN_PWDN,
@@ -87,8 +90,8 @@ esp_err_t my_esp_camera_init(
 		.jpeg_quality = 12,
 		// TESTING...
 		.fb_count = 2,
-		// .fb_location = CAMERA_FB_IN_PSRAM,
-		.fb_location = CAMERA_FB_IN_DRAM, // TESTING
+		.fb_location = CAMERA_FB_IN_PSRAM,
+		// .fb_location = CAMERA_FB_IN_DRAM, // TESTING
 	// 	.fb_count = 4,
 	// #ifdef BOARD_HAS_PSRAM
 	// 	.fb_location	= CAMERA_FB_IN_PSRAM,
@@ -108,71 +111,88 @@ esp_err_t my_esp_camera_init(
 
 #define NVS_CAMERA_NAMESPACE "camera"
 
-/// Reinitializes the camera module, finalizing applying some settings.
-/// Required for pixel format & framesize changes.
-void reinit() 
+/// Initializes the camera module. Can be called again to reinitialize, required for finalizing applying some settings,
+/// like pixel format & framesize changes, which might affect frame buffers sizes. A bit bad driver complexity...
+esp_err_t init() 
 {
+	mutex = xSemaphoreCreateMutex();
 	auto guard = SemaphoreGuard::take(mutex);
+
+	pixformat_t pixformat;
+	framesize_t framesize;
 
 	ESP_LOGD(TAG_CAMERA, "beginning reinit");
 	sensor_t* sensor = esp_camera_sensor_get();
-	if (unlikely(!sensor)) {
-		ESP_LOGE(TAG_CAMERA, "Failed to get camera handle");
-		goto fail;
-	}
-	else /* got sensor handle */ {
-		// Remember the settings required for re-initialization
-		pixformat_t pixformat = sensor->pixformat;
-		framesize_t framesize = sensor->status.framesize;
+	if (!sensor) {
+		ESP_LOGD(TAG_CAMERA, "failed to get camera handle, need to initialize first before loading from NVS");
+		ESP_ERROR_CHECK_OR_GOTO(fatal, my_esp_camera_init()); // with most default/safe settings
 
-		ESP_LOGD(TAG_CAMERA, "calling deinit");
-		ESP_IGNORE_ERROR(esp_camera_deinit());
-
-		ESP_LOGD(TAG_CAMERA, "deinit finished, calling init");
-		ESP_ERROR_CHECK_OR_GOTO(fail, my_esp_camera_init(pixformat, framesize));
-		// (error logged inside the function)
-
-		ESP_LOGD(TAG_CAMERA, "loading settings from NVS after reinit");
-		ESP_ERROR_CHECK_OR_GOTO(fail, esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE));
-		// (error logged inside the function)
-
-		ESP_LOGD(TAG_CAMERA, "testing after reinit");
+		ESP_LOGD(TAG_CAMERA, "testing default settings");
 		if (!check_can_take_picture()) { 
 			// (error logged inside the function)
-			goto fail;
+			goto fatal;
 		}
 
-		ESP_LOGD(TAG_CAMERA, "finished reinit");
-		return;
+		ESP_LOGD(TAG_CAMERA, "loading settings from NVS to get some params required for target init");
+		ESP_ERROR_CHECK_OR_GOTO(fail, esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE));
+
+		sensor = esp_camera_sensor_get(); // should work if above work
+		if (sensor->pixformat == KNOWN_GOOD_PIXFORMAT && 
+			sensor->status.framesize == KNOWN_GOOD_FRAMESIZE) {
+			ESP_LOGD(TAG_CAMERA, "loaded core settings params like defaults, no need to reinit");
+			return ESP_OK;
+		}
 	}
 
-fail:
-	return; // FIXME: ...; Note: now disabled for debugging
-	ESP_LOGW(TAG_CAMERA, "Failed to reinitialize, trying to fall back to defaults");
+	// Remember the settings required for re-initialization
+	pixformat = sensor->pixformat;
+	framesize = sensor->status.framesize;
 
+	ESP_LOGD(TAG_CAMERA, "calling deinit");
 	ESP_IGNORE_ERROR(esp_camera_deinit());
 
-	ESP_ERROR_CHECK(my_esp_camera_init()); // with most default/safe settings
-	check_can_take_picture(); // (logs in case of error)
-}
+	ESP_LOGD(TAG_CAMERA, "deinit finished, calling init");
+	ESP_ERROR_CHECK_OR_GOTO(fail, my_esp_camera_init(pixformat, framesize));
+	// (error logged inside the function)
 
-/// Initializes the camera related code.
-void init()
-{
-	mutex = xSemaphoreCreateMutex();
+	ESP_LOGD(TAG_CAMERA, "loading settings from NVS after reinit");
+	ESP_ERROR_CHECK_OR_GOTO(fail, esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE));
+	// (error logged inside the function)
 
-	// Note: `esp_camera_load_from_nvs` requires sensor to be initialized,
-	// so default/safe settings initializations needs to be performed first.
-
-	ESP_ERROR_CHECK(my_esp_camera_init(PIXFORMAT_JPEG, FRAMESIZE_240X240)); // TESTING
-	check_can_take_picture();
-
-	if (esp_camera_load_from_nvs(NVS_CAMERA_NAMESPACE) != ESP_OK) {
-		// Continuing with defaults (error logged inside the function)
+	ESP_LOGD(TAG_CAMERA, "testing after reinit");
+	if (!check_can_take_picture()) { 
+		// (error logged inside the function)
+		goto fail;
 	}
-	else /* loaded from NVS successfully */ {
-		reinit(); // will use settings loaded from NVS
+
+	return ESP_OK;
+
+fail:
+	ESP_LOGW(TAG_CAMERA, "Failed to reinitialize, trying to fall back to defaults");
+
+	ESP_LOGD(TAG_CAMERA, "calling deinit");
+	ESP_IGNORE_ERROR(esp_camera_deinit());
+
+	ESP_LOGD(TAG_CAMERA, "deinit finished, calling init");
+	ESP_ERROR_CHECK_OR_GOTO(fatal, my_esp_camera_init()); // with most default/safe settings
+
+	ESP_LOGD(TAG_CAMERA, "testing default settings");
+	if (!check_can_take_picture()) { 
+		// (error logged inside the function)
+		goto fatal;
 	}
+	return ESP_ERR_NOT_FINISHED;
+
+fatal:
+	ESP_LOGE(TAG_CAMERA, "Failed to initialize with default settings!");
+	if (CAM_PIN_RESET == -1 && CAM_PIN_PWDN == -1) {
+		ESP_LOGD(TAG_CAMERA, "No hardware restart available, try restarting by full power cycle");
+	}
+
+	ESP_LOGD(TAG_CAMERA, "calling deinit");
+	ESP_IGNORE_ERROR(esp_camera_deinit());
+
+	return ESP_FAIL;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -447,7 +467,7 @@ esp_err_t config(
 		esp_camera_save_to_nvs(NVS_CAMERA_NAMESPACE);
 
 		if (require_reinit)
-			reinit();
+			init();
 #ifdef CONFIG_CAMERA_EXTRA_DEBUG
 		if (xclk_mhz != -1)
 			sensor->set_xclk(sensor, LEDC_TIMER_0, xclk_mhz); // XVCLK (in MHz)

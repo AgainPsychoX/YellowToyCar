@@ -36,6 +36,6 @@ public:
 };
 
 /// Initializes camera system
-void init();
+esp_err_t init();
 
 }
