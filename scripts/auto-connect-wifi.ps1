@@ -82,7 +82,7 @@ while ($true) {
 			Write-Host -NoNewline " | "
 
 			Write-Host -NoNewline "Pinging $TargetIp... "
-			$pingResult = Test-Connection -ComputerName $TargetIp -Count 1 -ErrorAction SilentlyContinue
+			$pingResult = Test-Connection -ComputerName $TargetIp -Count 1 -TimeoutSeconds 1 -ErrorAction SilentlyContinue
 			if ($pingResult -and $pingResult.Status -eq 'Success') {
 				$firstPingTimeoutTimestamp = $null
 				$pingColor = if ($pingResult.Latency -lt 30) { "DarkGreen" } elseif ($pingResult.Latency -lt 80) { "Green" } elseif ($pingResult.Latency -lt 150) { "Yellow" } elseif ($pingResult.Latency -lt 300) { "DarkYellow" } elseif ($pingResult.Latency -lt 500) { "DarkRed" } else { "Red" }
