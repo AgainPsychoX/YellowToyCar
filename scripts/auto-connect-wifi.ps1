@@ -96,7 +96,7 @@ while ($true) {
 					$firstPingTimeoutTimestamp = Get-Date
 				}
 				# Try disconnect when signal stuck while ping timeouts keep happening
-				if (((Get-Date) - $firstPingTimeoutTimestamp).TotalSeconds -ge 5) {
+				if (((Get-Date) - $firstPingTimeoutTimestamp).TotalSeconds -ge 3) {
 					Write-Host -NoNewline " | Disconnecting to try refresh..."
 					netsh wlan disconnect | Out-Host
 					$firstPingTimeoutTimestamp = $null
