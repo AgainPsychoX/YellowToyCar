@@ -445,14 +445,14 @@ def run_test(args):
 					current_config = config_response.json()
 					if not current_config.get("camera"):
 						extra = "Camera config is empty, likely sensor crash."
-						result["status"] += f" - {extra}"
+						result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
 						print(f"- {extra}", end='', flush=True)
 
 						# Try restarting the device
 						print("Restarting device...", end='', flush=True)
 						if not restart_device(args.ip, progress_print='.'):
 							extra = "Device did not come back online after restart."
-							result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
+							result["status"] += f" - {extra}"
 							print(f"[FATAL] {extra}", end='', flush=True)
 							return False
 
@@ -466,7 +466,7 @@ def run_test(args):
 						config_response.raise_for_status()
 						if not config_response.json().get("camera"):
 							extra = "Camera config still empty after restart."
-							result["status"] = result["status"].replace("FAIL: ", "FATAL: ", 1) + f" - {extra}"
+							result["status"] += f" - {extra}"
 							print(f"[FATAL] {extra}", end='', flush=True)
 							return False
 				except requests.exceptions.RequestException:
