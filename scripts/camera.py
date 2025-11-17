@@ -49,6 +49,54 @@ def generate_frame_filename_for_saving(index):
 	timestamp = strftime("%Y%m%d_%H%M%S")
 	return f'{index:0>4}_{timestamp}'
 
+def _escape_non_printable_ascii(s: str) -> str:
+	"""Replaces non-printable ASCII characters with their escape sequences."""
+	return ''.join(c if 32 <= ord(c) <= 126 else repr(c)[1:-1] for c in s)
+
+def print_unexpected(data: bytes):
+	"""
+	Prints data from the stream. If data is ASCII, prints it as a string.
+	If it contains non-ASCII characters, prints a hex dump, truncating
+	if it is too long.
+	"""
+	try:
+		# Check if the data can be fully decoded as ASCII
+		decoded_str = data.decode('ascii')
+		if not decoded_str.strip(): # Still check if it's effectively empty after stripping
+			return # Don't print if it's only whitespace or empty
+		print(f"  ASCII: '{_escape_non_printable_ascii(decoded_str)}'")
+	except UnicodeDecodeError:
+		# If not, print a hex dump
+		if len(data) <= 16:
+			hex_line = ' '.join(f'{b:02x}' for b in data)
+			ascii_line = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in data)
+			print(f"  HEX:   {hex_line}")
+			print(f"  ASCII: {ascii_line}")
+		else:
+			def print_hex_chunk(offset, chunk_data):
+				hex_part = ' '.join(f'{b:02x}' for b in chunk_data)
+				ascii_part = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk_data)
+				print(f"{offset:02x} | {hex_part:<47} | {ascii_part}")
+
+			# Pretty print in a hex dump table format
+			header_hex = ' '.join(f'{i:02x}' for i in range(16))
+			print(f"   | {header_hex} | 0123456789ABCDEF (ASCII)")
+			print(f"-- | {'-' * (16 * 3 - 1)} | {'-' * 16}")
+
+			if len(data) > 128: # 8 lines * 16 bytes/line
+				# Print first 4 lines
+				for i in range(0, 64, 16):
+					print_hex_chunk(i, data[i:i+16])
+				print("...| ... | ...")
+				# Print last 4 lines
+				start_of_last_part = len(data) - 64
+				for i in range(0, 64, 16):
+					offset = start_of_last_part + i
+					print_hex_chunk(offset, data[offset:offset+16])
+			else:
+				for i in range(0, len(data), 16):
+					print_hex_chunk(i, data[i:i+16])
+
 ################################################################################
 
 def handle_mjpeg_stream(args, config):
@@ -206,6 +254,9 @@ def handle_static_size_stream(args, config, pixformat):
 		for chunk in response.iter_content(chunk_size=chunk_size):
 			total_bytes += len(chunk)
 
+			if args.verbose:
+				print(f"Unexpected chunk with size {len(chunk)} (expected {chunk_size}):")
+				print_unexpected(chunk)
 			# Discard stream part & boundary markers by assuming they are different chunks
 			if len(chunk) != chunk_size:
 				continue
@@ -291,6 +342,7 @@ def main():
 	parser.add_argument('--overwrite', help='Allow overwriting existing files (warning: might remove files!)', required=False, action='store_true')
 	parser.add_argument('--always-on-top', help='If set, the window will be always on top.', required=False, action='store_true')
 	parser.add_argument('--fps-window', help='How much seconds behind to be used to calculate average FPS.', required=False, type=float, default=10)
+	parser.add_argument('--verbose', help='Print unexpected data from the stream.', required=False, action='store_true')
 	args = parser.parse_args()
 
 	if args.save:
