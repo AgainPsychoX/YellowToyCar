@@ -391,6 +391,13 @@ def main():
 
 	try:
 		pixformat = int(config['camera.pixformat'])
+
+		# Sometimes, after crash, framesize is equal 25 - idk why...
+		framesize = int(config['camera.framesize'])
+		if framesize >= len(FRAMESIZE_TO_DIMS):
+			print(f"Warning: framesize={framesize} is out of range. Assuming largest framesize={len(FRAMESIZE_TO_DIMS) - 1} aka {FRAMESIZE_TO_DIMS[-1]}")
+			config['camera.framesize'] = len(FRAMESIZE_TO_DIMS) - 1
+
 		if args.frame:
 			if pixformat == PIXFORMAT_JPEG:
 				handle_jpeg_frame(args, config)
