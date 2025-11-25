@@ -6,6 +6,7 @@
 
 #include "hal.hpp"
 #include "control.hpp"
+#include "ai.hpp"
 namespace app::nvs {
 	inline void init()
 	{
@@ -20,9 +21,9 @@ namespace app::nvs {
 namespace app::network { // from network.cpp
 	void init(void);
 }
-namespace app::camera { // from camera.cpp
-	void init(void);
-}
+// namespace app::camera { // from camera.cpp
+// 	void init(void);
+// }
 namespace app::http { // from http.cpp
 	void init(void);
 }
@@ -50,6 +51,8 @@ static const char* TAG = "main";
 extern "C" void app_main(void)
 {
 	ESP_LOGI(TAG, "Hello!");
+	esp_log_level_set("FbsLoader", ESP_LOG_DEBUG);
+	esp_log_level_set("dl::Model", ESP_LOG_DEBUG);
 
 	////////////////////////////////////////
 
@@ -60,6 +63,7 @@ extern "C" void app_main(void)
 	control::init();
 	http::init();
 	time::init();
+	ai::init();
 
 	////////////////////////////////////////
 

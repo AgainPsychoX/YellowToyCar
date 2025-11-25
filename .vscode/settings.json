@@ -104,6 +104,7 @@
 		"DMODEL",
 		"dstack",
 		"dtype",
+		"ESPDL",
 		"Espressif",
 		"esptool",
 		"fourcc",
@@ -226,17 +227,27 @@
 		"**/.pio": true,
 		"**/logs": true,
 		"**/private/capture": true,
-		// Platform specific code other than the one used
-		"**/managed_components/esp32-camera/target/esp32s2": true,
-		"**/managed_components/esp32-camera/sensors/**/b**": true,
-		"**/managed_components/esp32-camera/sensors/**/g**": true,
-		"**/managed_components/esp32-camera/sensors/**/h**": true,
-		"**/managed_components/esp32-camera/sensors/**/m**": true,
-		"**/managed_components/esp32-camera/sensors/**/n**": true,
-		"**/managed_components/esp32-camera/sensors/**/ov3**": true,
-		"**/managed_components/esp32-camera/sensors/**/ov5**": true,
-		"**/managed_components/esp32-camera/sensors/**/ov7**": true,
-		"**/managed_components/esp32-camera/sensors/**/s**": true,
+
+		// Allow esp32-camera except platform specific code other than the one used
+		// "**/managed_components/esp32-camera/target/esp32s2": true,
+		// "**/managed_components/esp32-camera/sensors/**/b**": true,
+		// "**/managed_components/esp32-camera/sensors/**/g**": true,
+		// "**/managed_components/esp32-camera/sensors/**/h**": true,
+		// "**/managed_components/esp32-camera/sensors/**/m**": true,
+		// "**/managed_components/esp32-camera/sensors/**/n**": true,
+		// "**/managed_components/esp32-camera/sensors/**/ov3**": true,
+		// "**/managed_components/esp32-camera/sensors/**/ov5**": true,
+		// "**/managed_components/esp32-camera/sensors/**/ov7**": true,
+		// "**/managed_components/esp32-camera/sensors/**/s**": true,
+
+		// External components
+		//"**/managed_components/esp32-camera": true,
+		// "**/managed_components/espressif__dl_fft": true,
+		// "**/managed_components/espressif__esp_jpeg": true,
+		// "**/managed_components/espressif__esp_new_jpeg": true,
+		// "**/managed_components/espressif__esp-dsp": true,
+		// "**/managed_components/espressif__jsmn": true,
+		// "**/components/esp-dl": true, // external, but as Git module to get newest version
 	},
 
 	// Fix PlatformIO toolbar "Upload" as without serial monitor, 

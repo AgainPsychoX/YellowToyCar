@@ -1,5 +1,28 @@
 dependencies:
-  esp32-camera: # "^2.1.3" but with GDMA disconnect fix, see https://github.com/espressif/esp32-camera/pull/804 
-    git: https://github.com/cnadler86/esp32-camera.git
-    version: fix/gdma_disconnect # branch
-  jsmn: "^1.1.0"
+    esp32-camera: # "^2.1.3" but with GDMA disconnect fix, see https://github.com/espressif/esp32-camera/pull/804 
+        git: https://github.com/cnadler86/esp32-camera.git
+        version: fix/gdma_disconnect # branch
+    jsmn: "^1.1.0"
+    # Following are required by hand_gesture_recognition anyway for now
+    # espressif/esp-dl:
+    #     path: ../components/esp-dl/esp-dl
+    #     git: https://github.com/espressif/esp-dl.git
+    #     version: master
+    #     path: esp-dl
+    #     version: "^3.2.0"
+    #     override_path: "S:/asdfasdf/esp-dl/esp-dl"
+    # espressif/hand_detect:
+    #     path: ../components/esp-dl/models/hand_detect
+    #     git: https://github.com/espressif/esp-dl.git
+    #     version: master
+    #     path: models/hand_detect
+    espressif/hand_gesture_recognition:
+        path: ../components/esp-dl/models/hand_gesture_recognition
+
+        # Following fill fetch, but the relative paths in it's idf_component.yml 
+        #git: https://github.com/espressif/esp-dl.git
+        #version: master
+        #path: models/hand_gesture_recognition
+
+        # Can fetch from the official registry, but it tries to use esp-dl 3.2.0 which lacks some stuff
+        #version: "^0.1.0" # bad because it require esp-dl ^3.2.0 which lacks some stuff

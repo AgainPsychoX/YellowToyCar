@@ -16,6 +16,7 @@
 #include "common.hpp"
 #include "camera.hpp"
 #include "bmp.hpp"
+#include "ai.hpp"
 
 namespace app::network { // from network.cpp
 	esp_err_t config(char* input, jsmntok_t* root, char* output, size_t output_length, int* output_return); 
@@ -536,6 +537,7 @@ esp_err_t capture_handler(httpd_req_t* req)
 			httpd_resp_set_type(req, "image/jpeg");
 			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
 			httpd_resp_send(req, (const char*)fb->buf, fb->len);
+			ai::recognize_gesture(*fb);
 			return ESP_OK;
 		}
 		// TODO: return BMP if PIXFORMAT_RGB565, see https://en.wikipedia.org/wiki/BMP_file_format

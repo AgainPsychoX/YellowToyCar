@@ -1,3 +1,6 @@
 [submodule "libs/constexpr-to-string"]
 	path = libs/constexpr-to-string
 	url = https://github.com/tcsullivan/constexpr-to-string.git
+[submodule "components/esp-dl"]
+	path = components/esp-dl
+	url = https://github.com/espressif/esp-dl.git
