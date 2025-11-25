@@ -1,4 +1,5 @@
-Import("env")
+Import('env') # type: ignore
+env, DefaultEnvironment = env, DefaultEnvironment # type: ignore
 
 import os
 import gzip
