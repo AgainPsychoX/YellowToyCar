@@ -537,7 +537,7 @@ esp_err_t capture_handler(httpd_req_t* req)
 			httpd_resp_set_type(req, "image/jpeg");
 			httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=capture.jpg");
 			httpd_resp_send(req, (const char*)fb->buf, fb->len);
-			ai::recognize_gesture(*fb);
+			ai::recognize_gesture_to_json(*fb);
 			return ESP_OK;
 		}
 		// TODO: return BMP if PIXFORMAT_RGB565, see https://en.wikipedia.org/wiki/BMP_file_format
@@ -612,17 +612,26 @@ static const char* TAG_HTTPD_STREAM = "httpd-stream";
 #define PART_BOUNDARY "123456789000000000000987654321"
 #define _STREAM_CONTENT_TYPE "multipart/x-mixed-replace;boundary=" PART_BOUNDARY
 #define _STREAM_BOUNDARY "\r\n--" PART_BOUNDARY "\r\n"
-#define _STREAM_PART "Content-Type: %s\r\nContent-Length: %u\r\n\r\n"
 
 esp_err_t stream_handler(httpd_req_t* req)
 {
 	int ret;
 	esp_err_t err;
 
+	bool recognize = false;
+	for (auto&& [key, value] : QuerystringCrawler(skipToQuerystring(req->uri))) {
+		if (key == "recognize") {
+			if (parseBooleanFast(value.begin())) {
+				recognize = true;
+				break;
+			}
+		}
+	}
+
 	httpd_resp_set_type(req, _STREAM_CONTENT_TYPE);
 	httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
-	ESP_LOGI(TAG_HTTPD_STREAM, "Starting stream");
+	ESP_LOGI(TAG_HTTPD_STREAM, "Starting stream (recognize=%d)", recognize);
 	for (;;) {
 		auto fb = camera::FrameBufferGuard::take();
 		if (unlikely(!fb)) {
@@ -635,6 +644,22 @@ esp_err_t stream_handler(httpd_req_t* req)
 		switch (fb->format) {
 			case PIXFORMAT_JPEG: {
 				contentType = "image/jpeg";
+				// TODO: allow for other formats...
+				if (recognize) {
+					auto output = ai::recognize_gesture_to_json(*fb);
+
+					err = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, sizeof(_STREAM_BOUNDARY) - 1);
+					if (err != ESP_OK) break;
+
+					char partHeaderBuffer[128];
+					ret = std::snprintf(partHeaderBuffer, sizeof(partHeaderBuffer), 
+						"Content-Type: application/json\r\nContent-Length: %u\r\n\r\n", output.size());
+					err = httpd_resp_send_chunk(req, partHeaderBuffer, ret);
+					if (err != ESP_OK) break;
+
+					err = httpd_resp_send_chunk(req, output.c_str(), output.size());
+					if (err != ESP_OK) break;
+				}
 				break;
 			}
 			// TODO: support other?
@@ -649,13 +674,16 @@ esp_err_t stream_handler(httpd_req_t* req)
 			return ESP_FAIL;
 		}
 
-		char partHeaderBuffer[64];
-		ret = std::snprintf(partHeaderBuffer, sizeof(partHeaderBuffer), _STREAM_PART, contentType, fb->len);
+		err = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, sizeof(_STREAM_BOUNDARY) - 1);
+		if (err != ESP_OK) break;
+
+		char partHeaderBuffer[128];
+		ret = std::snprintf(partHeaderBuffer, sizeof(partHeaderBuffer), 
+			"Content-Type: %s\r\nContent-Length: %u\r\n\r\n", contentType, fb->len);
 		err = httpd_resp_send_chunk(req, partHeaderBuffer, ret);
 		if (err != ESP_OK) break;
+
 		err = httpd_resp_send_chunk(req, reinterpret_cast<char*>(fb->buf), fb->len);
-		if (err != ESP_OK) break;
-		err = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, sizeof(_STREAM_BOUNDARY));
 		if (err != ESP_OK) break;
 	}
 

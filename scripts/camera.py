@@ -107,56 +107,94 @@ def handle_mjpeg_stream(args, config):
 	saved_frames = 0
 	total_bytes = 0
 	last_frame_points = deque()
-	response = requests.get(f'http://{args.ip}:81/stream', stream=True)
+	response = requests.get(f'http://{args.ip}:81/stream{'?recognize=1' if args.recognize else ''}', stream=True)
 	if response.status_code == 200:
+		content_type = response.headers['content-type']
+		boundary = content_type.split(';')[1].split('=')[1]
+		boundary = f'--{boundary}'.encode()
+
 		buffer = bytes()
+		metadata = None
 		for chunk in response.iter_content(chunk_size=4096):
 			total_bytes += len(chunk)
 			buffer += chunk
-			a = buffer.find(JPEG_SOI_MARKER)
-			if a == -1:
-				continue
-			b = buffer.find(JPEG_EOI_MARKER, a)
-			if b == -1:
-				continue
+			
+			while True:
+				start_boundary = buffer.find(boundary)
+				if start_boundary == -1:
+					break
+				
+				end_boundary = buffer.find(boundary, start_boundary + len(boundary))
+				if end_boundary == -1:
+					break
 
-			jpg = buffer[a:b+2]
-			buffer = buffer[b+2:]
+				part = buffer[start_boundary:end_boundary]
+				buffer = buffer[end_boundary:]
 
-			now = time()
-			last_frame_points.append((now, total_bytes))
-			while len(last_frame_points) > 1 and last_frame_points[0][0] < (now - args.fps_window): # keep at least 2
-				last_frame_points.popleft()
-			if len(last_frame_points) > 1:
-				time_diff = last_frame_points[-1][0] - last_frame_points[0][0]
-				fps = len(last_frame_points) / time_diff
-				bps = (last_frame_points[-1][1] - last_frame_points[0][1]) / time_diff
-			else: # first frame
-				fps = 0
-				bps = total_bytes
-			total_frames += 1
-			from_start = now - start
-			print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB: {len(jpg) / 1024:.3f}\tKB/s: {bps / 1024:.3f}')
+				header_end = part.find(b'\r\n\r\n')
+				if header_end == -1:
+					continue
+				
+				header = part[len(boundary):header_end].decode()
+				body = part[header_end+4:]
 
-			image = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-			height, width, channels = image.shape
-			if width * args.scale >= 120:
-				cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-				cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
-			if args.always_on_top:
-				cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
-			cv2.imshow(window_name, image)
+				part_content_type = ''
+				for line in header.split('\r\n'):
+					if 'content-type' in line.lower():
+						part_content_type = line.split(':')[1].strip()
 
-			if args.save:
-				saved_fps = saved_frames / from_start
-				if not args.save_fps or saved_fps < args.save_fps:
-					filename = generate_frame_filename_for_saving(total_frames) + '.jpg'
-					cv2.imwrite(os.path.join(args.save, filename), image)
-					saved_frames += 1
+				if part_content_type == 'application/json':
+					try:
+						metadata = benedict(body.decode('utf-8').strip(), format='json')
+					except Exception:
+						print("Failed to decode JSON metadata")
+						print(body)
+						metadata = None
+				elif part_content_type == 'image/jpeg':
+					now = time()
+					last_frame_points.append((now, total_bytes))
+					while len(last_frame_points) > 1 and last_frame_points[0][0] < (now - args.fps_window): # keep at least 2
+						last_frame_points.popleft()
+					if len(last_frame_points) > 1:
+						time_diff = last_frame_points[-1][0] - last_frame_points[0][0]
+						fps = len(last_frame_points) / time_diff
+						bps = (last_frame_points[-1][1] - last_frame_points[0][1]) / time_diff
+					else: # first frame
+						fps = 0
+						bps = total_bytes
+					total_frames += 1
+					from_start = now - start
+					print(f'{from_start:.3f}s: frame #{total_frames}\tFPS: {fps:.2f}\tKB: {len(body) / 1024:.3f}\tKB/s: {bps / 1024:.3f}')
 
-			esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
-			if check_window_is_closed(window_name) or esc_or_q_pressed:
-				break
+					image = cv2.imdecode(np.frombuffer(body, dtype=np.uint8), cv2.IMREAD_COLOR)
+					
+					if metadata:
+						for hand in metadata['hands']:
+							box = hand['box']
+							x1, y1, x2, y2 = box[0], box[1], box[2], box[3]
+							cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+							label = f"{hand['gesture_category']} ({hand['gesture_score']:.2f})"
+							cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+						metadata = None
+
+					height, width, channels = image.shape
+					if width * args.scale >= 120:
+						cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+						cv2.resizeWindow(window_name, width * args.scale, height * args.scale)
+					if args.always_on_top:
+						cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
+					cv2.imshow(window_name, image)
+
+					if args.save:
+						saved_fps = saved_frames / from_start
+						if not args.save_fps or saved_fps < args.save_fps:
+							filename = generate_frame_filename_for_saving(total_frames) + '.jpg'
+							cv2.imwrite(os.path.join(args.save, filename), image)
+							saved_frames += 1
+
+					esc_or_q_pressed = cv2.pollKey() in [27, ord('q')]
+					if check_window_is_closed(window_name) or esc_or_q_pressed:
+						return
 	else:
 		print(f'Error: Received unexpected status code {response.status_code}')
 
@@ -343,6 +381,7 @@ def main():
 	parser.add_argument('--always-on-top', help='If set, the window will be always on top.', required=False, action='store_true')
 	parser.add_argument('--fps-window', help='How much seconds behind to be used to calculate average FPS.', required=False, type=float, default=10)
 	parser.add_argument('--verbose', help='Print unexpected data from the stream.', required=False, action='store_true')
+	parser.add_argument('--recognize', help='If set, enables gesture recognition.', required=False, action='store_true')
 	args = parser.parse_args()
 
 	if args.save:
