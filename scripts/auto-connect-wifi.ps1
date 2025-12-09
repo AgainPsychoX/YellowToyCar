@@ -3,6 +3,7 @@ param(
 	[string]$TargetSsid = "YellowToyCar",
 	[string]$TargetIp = "192.168.4.1",
 	[int]$CheckIntervalMilliseconds = 333,
+	[int]$ReconnectIntervalMilliseconds = 500,
 	[ValidateSet("OnlyInterface", "OnlyScan", "Both")]
 	[string]$SignalStrengthSource = "OnlyScan",
 	[switch]$ShowRemoteSignal = $false
@@ -11,7 +12,7 @@ param(
 function Get-SignalColor {
 	param(
 		[int]$Value,
-		[ValidateSet("percent", "dbm")]
+		[ValidateSet("percent", "dbm", "ping")]
 		[string]$Type
 	)
 
@@ -22,12 +23,21 @@ function Get-SignalColor {
 		if ($Value -gt 60) { return "DarkYellow" }
 		if ($Value -gt 50) { return "DarkRed" }
 		return "Red"
-	} elseif ($Type -eq "dbm") {
+	}
+	elseif ($Type -eq "dbm") {
 		if ($Value -gt -40) { return "DarkGreen" }
 		if ($Value -gt -50) { return "Green" }
 		if ($Value -gt -60) { return "Yellow" }
 		if ($Value -gt -70) { return "DarkYellow" }
 		if ($Value -gt -80) { return "DarkRed" }
+		return "Red"
+	}
+	elseif ($Type -eq "ping") {
+		if ($Value -lt 30) { return "DarkGreen" }
+		if ($Value -lt 80) { return "Green" }
+		if ($Value -lt 150) { return "Yellow" }
+		if ($Value -lt 300) { return "DarkYellow" }
+		if ($Value -lt 500) { return "DarkRed" }
 		return "Red"
 	}
 }
@@ -65,7 +75,7 @@ while ($true) {
 			}
 
 			# Print, ending with ping 
-			Write-Host -NoNewline "$(Get-LogLineDate) Connected to '$TargetSsid' | "
+			Write-Host -NoNewline "$(Get-LogLineDate) "
 
 			if ($SignalStrengthSource -in @("OnlyInterface", "Both") -and $signalFromInterface) {
 				$percentValue = [int]($signalFromInterface -replace '%', '')
@@ -81,12 +91,12 @@ while ($true) {
 			}
 			Write-Host -NoNewline " | "
 
-			Write-Host -NoNewline "Pinging $TargetIp... "
+			Write-Host -NoNewline "ICMP: "
 			$pingResult = Test-Connection -ComputerName $TargetIp -Count 1 -TimeoutSeconds 1 -ErrorAction SilentlyContinue
 			if ($pingResult -and $pingResult.Status -eq 'Success') {
 				$firstPingTimeoutTimestamp = $null
-				$pingColor = if ($pingResult.Latency -lt 30) { "DarkGreen" } elseif ($pingResult.Latency -lt 80) { "Green" } elseif ($pingResult.Latency -lt 150) { "Yellow" } elseif ($pingResult.Latency -lt 300) { "DarkYellow" } elseif ($pingResult.Latency -lt 500) { "DarkRed" } else { "Red" }
-				Write-Host -NoNewline "$($pingResult.Latency)ms".PadLeft(7) -ForegroundColor $pingColor
+				$pingColor = Get-SignalColor -Value $pingResult.Latency -Type "ping"
+				Write-Host -NoNewline "$($pingResult.Latency)ms".PadLeft(5) -ForegroundColor $pingColor
 				Start-Sleep -Milliseconds $CheckIntervalMilliseconds
 			}
 			else {
@@ -105,15 +115,21 @@ while ($true) {
 			}
 
 			if ($ShowRemoteSignal) {
-				Write-Host -NoNewline " | Remote RSSI: "
+				Write-Host -NoNewline " | HTTP: "
 				if ($pingResult.Status -eq 'Success') {
 					try {
+						$statusRequestMeasurement = Measure-Command {
+							$statusResponse = Invoke-WebRequest -Uri "http://$TargetIp/status?details=1" -TimeoutSec 2 -UseBasicParsing
+						}
+						$statusRequestMs = [int]$statusRequestMeasurement.TotalMilliseconds
+						Write-Host -NoNewline "$($statusRequestMs)ms".PadLeft(5) -ForegroundColor (Get-SignalColor -Value $statusRequestMs -Type "ping")
+
 						$localMac = ($interfaces | Select-String -Pattern "^\s+Physical address\s+:\s(.+)").Matches[0].Groups[1].Value.Trim().Replace("-", "").Replace(":", "").ToLower()
-						$statusResponse = Invoke-WebRequest -Uri "http://$TargetIp/status?details=1" -TimeoutSec 2 -UseBasicParsing
 						$status = $statusResponse.Content | ConvertFrom-Json
 						$remoteStation = $status.stations | Where-Object { ($_.mac.Replace("-", "").Replace(":", "").ToLower()) -eq $localMac }
 						if ($remoteStation) {
 							$remoteRssi = $remoteStation.rssi
+							Write-Host -NoNewline " | RSSI: "
 							Write-Host -NoNewline "${remoteRssi}dBm" -ForegroundColor (Get-SignalColor -Value $remoteRssi -Type "dbm")
 						}
 						else {
@@ -131,14 +147,15 @@ while ($true) {
 
 			Write-Host " " # for the new line
 		}
-		else {
+		else { # not connected
 			$firstPingTimeoutTimestamp = $null
 			Write-Host -NoNewline "$(Get-LogLineDate) Not connected to '$TargetSsid'. Attempting to connect... "
 			netsh wlan connect name="$TargetSsid" | Out-Host
+			Start-Sleep -Milliseconds $ReconnectIntervalMilliseconds
 		}
 	}
 	catch {
 		Write-Warning "$(Get-LogLineDate) An error occurred: $_"
+		Start-Sleep -Milliseconds 1000
 	}
-	Start-Sleep -Milliseconds $CheckIntervalMilliseconds
 }
