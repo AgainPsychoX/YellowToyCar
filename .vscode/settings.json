@@ -104,6 +104,7 @@
 		"DMODEL",
 		"dstack",
 		"dtype",
+		"ESPDET",
 		"ESPDL",
 		"Espressif",
 		"esptool",
@@ -143,6 +144,7 @@
 		"matroska",
 		"mcpwm",
 		"MJPEG",
+		"MOBILENETV",
 		"netif",
 		"netsh",
 		"OPMODE",
@@ -280,4 +282,17 @@
 			"commands": "platformio-ide.newTerminal"
 		}
 	],
+
+	"python.terminal.activateEnvironment": false,
+	"terminal.integrated.defaultProfile.windows": "PowerShell with Conda (project)",
+	"terminal.integrated.profiles.windows": {
+		"PowerShell with Conda (project)": {
+			"source": "PowerShell",
+			"args": [
+				"-NoExit",
+				"-Command",
+				"conda activate .\\.conda"
+			]
+		}
+	}
 }
