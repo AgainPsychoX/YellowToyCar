@@ -19,6 +19,8 @@ import os
 import shutil
 from typing import Dict, List, Tuple
 import cv2
+import imagehash
+from PIL import Image
 import yaml
 
 # Leave the debugging code here for easy enabling when needed
@@ -282,6 +284,36 @@ def read_class_names_from_file(path: str) -> Dict[str, int]:
 	return name_to_id
 
 
+def prepare_hash_function(algorithm: str = 'phash', hash_size: int = 8):
+	"""
+	Factory function that returns a configured hash function using imagehash library.
+
+	Args:
+		algorithm: One of 'ahash', 'dhash', 'phash', 'whash'
+		hash_size: Size of hash (larger = more precise, smaller = more tolerant)
+
+	Returns:
+		A function that takes an OpenCV image (BGR format) and returns an ImageHash object
+	"""
+	def hash_from_cv2_image(cv2_img):
+		# Convert BGR (OpenCV) to RGB (PIL)
+		rgb_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
+		pil_img = Image.fromarray(rgb_img)
+		
+		if algorithm == 'ahash':
+			return imagehash.average_hash(pil_img, hash_size=hash_size)
+		elif algorithm == 'dhash':
+			return imagehash.dhash(pil_img, hash_size=hash_size)
+		elif algorithm == 'phash':
+			return imagehash.phash(pil_img, hash_size=hash_size)
+		elif algorithm == 'whash':
+			return imagehash.whash(pil_img, hash_size=hash_size)
+		else:
+			raise ValueError(f"Unknown hash algorithm: {algorithm}")
+	
+	return hash_from_cv2_image
+
+
 def main() -> None:
 	parser = argparse.ArgumentParser(description='Prepare YOLO .txt annotations from Label Studio video annotations.')
 	parser.add_argument('--json-file', required=True, 
@@ -304,6 +336,16 @@ def main() -> None:
 		help="Inline mapping 'label:rrggbb,label2:rrggbb' to control bounding box colors in debug images.")
 	parser.add_argument('--overwrite', action='store_true',
 		help='Clear output directories if they are not empty before writing.')
+	parser.add_argument('--detect-duplicates', action='store_true',
+		help='Enable perceptual hash-based duplicate detection to skip similar images.')
+	parser.add_argument('--hash-algorithm', choices=['ahash', 'dhash', 'phash', 'whash'], default='phash',
+		help='Perceptual hash algorithm: ahash (average), dhash (difference), phash (DCT-based, default), whash (wavelet).')
+	parser.add_argument('--hash-threshold', type=int, default=5,
+		help='Hamming distance threshold for duplicates (0-64, lower=stricter). Typical: phash=5-10, ahash/dhash=5-8.')
+	parser.add_argument('--hash-size', type=int, default=8,
+		help='Hash size in pixels (default: 8). Larger=more precise, smaller=more tolerant to variations.')
+	parser.add_argument('--verbose', action='store_true',
+		help='Print detailed processing information for each image (file, hash distance, labels, action).')
 	args = parser.parse_args()
 
 	name_to_id = read_class_names_from_file(args.class_names_file)
@@ -339,8 +381,6 @@ def main() -> None:
 
 	frame_bboxes = build_frame_bboxes(tracks)
 
-	image_map = collect_image_files(args.image_dir, exts)
-
 	# Gather all labels used (each label is a string). We'll expand multi-label boxes as multiple objects.
 	labels_set = set()
 	for bboxes in frame_bboxes.values():
@@ -363,10 +403,18 @@ def main() -> None:
 	# Track per-label how many images contain that label (each image counted once per label)
 	label_image_counts: Dict[str, int] = {}
 
+	# Duplicate detection state
+	hash_db = {}  # dict[ImageHash, str]: hash -> first image filename with that hash
+	skipped_duplicates = 0
+	hash_func = None
+	if args.detect_duplicates:
+		hash_func = prepare_hash_function(args.hash_algorithm, args.hash_size)
+
 	# Process each image file in a single pass: write YOLO .txt + optionally draw debug image
 	processed = 0  # count of successfully read images
 	written = 0
 	processed_with_annotations = 0
+	image_map = collect_image_files(args.image_dir, exts)
 	for frame_num, image_name in image_map.items():
 		image_path = os.path.join(args.image_dir, image_name)
 		img = cv2.imread(image_path)
@@ -375,6 +423,31 @@ def main() -> None:
 			continue
 		processed += 1
 
+		# Duplicate detection using perceptual hashing
+		min_distance = None
+		most_similar_to = None
+		is_duplicate = False
+		if args.detect_duplicates:
+			img_hash = hash_func(img)
+			# Check for similar hash in database
+			for existing_hash, existing_name in hash_db.items():
+				dist = img_hash - existing_hash  # ImageHash uses - operator for Hamming distance
+				if min_distance is None or dist < min_distance:
+					min_distance = dist
+					most_similar_to = existing_name
+				if dist <= args.hash_threshold:
+					# Found duplicate
+					if args.verbose:
+						print(f"{image_name}: Skipping (duplicate of {existing_name}, distance={dist})")
+					skipped_duplicates += 1
+					is_duplicate = True
+					break
+			if is_duplicate:
+				continue  # Skip to next image in outer loop
+			# No duplicate found - store this hash
+			hash_db[img_hash] = image_name
+
+		# Get bounding boxes and labels for this frame
 		bboxes = frame_bboxes.get(frame_num, [])
 		labels_in_image = set()
 		for labels, *_ in bboxes:
@@ -386,6 +459,26 @@ def main() -> None:
 			was_written = write_yolo_txt_annotation(bboxes, name_to_id, args.output_dir, image_name, skip_empty=args.skip_empty)
 			if was_written:
 				written += 1
+			
+			# Verbose output - single line per image with all info
+			if args.verbose:
+				if args.detect_duplicates and min_distance is not None:
+					dist_info = f"dist={min_distance}"
+				else:
+					dist_info = ""
+				
+				if labels_in_image:
+					label_str = ', '.join(sorted(labels_in_image))
+					action = f"annotated: {label_str}"
+				elif args.skip_empty:
+					action = "no annotations (empty file skipped)"
+				else:
+					action = "no annotations (empty file created)"
+				
+				if dist_info:
+					print(f"{image_name}: {dist_info} → {action}")
+				else:
+					print(f"{image_name} → {action}")
 		except ValueError as e:
 			print(f"Error: {e} — aborting")
 			raise SystemExit(1)
@@ -405,7 +498,15 @@ def main() -> None:
 
 	# Print summary
 	total_images = processed
-	print(f"Processed {total_images} readable images; wrote {written} annotation files to {args.output_dir}")	
+	print(f"\n{'-'*60}")
+	print(f"SUMMARY")
+	print(f"{'-'*60}")
+	print(f"Processed {total_images} readable images; wrote {written} annotation files to {args.output_dir}")
+	if args.detect_duplicates:
+		unique_images = total_images - skipped_duplicates
+		print(f"Duplicate detection enabled ({args.hash_algorithm}, threshold={args.hash_threshold}, size={args.hash_size}):")
+		print(f"  Unique images: {unique_images} ({(unique_images / total_images * 100) if total_images else 0:.2f}%)")
+		print(f"  Duplicates skipped: {skipped_duplicates} ({(skipped_duplicates / total_images * 100) if total_images else 0:.2f}%)")
 	print(f"Images with at least one annotation: {processed_with_annotations} ({(processed_with_annotations / total_images * 100) if total_images else 0:.2f}%)")
 	if label_image_counts:
 		print('\nPer-label image counts:')
