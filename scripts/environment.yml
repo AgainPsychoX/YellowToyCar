@@ -1,0 +1,34 @@
+name: YellowToyCar
+channels:
+  - pytorch
+  - conda-forge
+  - nvidia
+  - defaults
+dependencies:
+  - python>=3.10
+
+  # Comms
+  - python-benedict
+  - requests
+  # TODO: consider replacing above two with more basic packages: urllib, json, etc.
+
+  # Core scientific stack
+  - numpy
+  - opencv
+  - pillow
+  - scikit-learn
+
+  # PyTorch + GPU (CUDA bundled by conda)
+  - pytorch-gpu>=2.9.1
+  - torchvision
+
+  # Other
+  - pyside6 # GUI for transparent_triangle.py
+
+  # Pip only for pure-python packages
+  - pip
+  - pip:
+      - timm>=0.9.0
+      - keyboard  # keyboard input handling (used in control.py)
+      - pyyaml  # YAML parsing
+      - imagehash  # perceptual image hashing
