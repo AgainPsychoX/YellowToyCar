@@ -9,40 +9,29 @@ Requires embeddings cache to be pre-computed by select_frames_vit.py
 import sys
 import argparse
 from pathlib import Path
-from dataclasses import dataclass
 from typing import List, Set, Optional
 
 from PySide6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 	QLabel, QSlider, QPushButton, QScrollArea, QGridLayout,
-	QFrame, QSplitter, QProgressDialog, QMessageBox, QGroupBox,
+	QSplitter, QProgressDialog, QMessageBox, QGroupBox,
 	QSpinBox, QDoubleSpinBox, QAbstractSpinBox, QCheckBox, QStyleFactory
 )
 from PySide6.QtCore import Qt, Signal, QSize, QThread, QTimer, QRect
 from PySide6.QtGui import (
-	QPixmap, QImage, QColor, QPainter, QPen, QFont, QShortcut, QKeySequence,
+	QPixmap, QColor, QPainter, QPen, QFont, QShortcut, QKeySequence,
 	QAction, QActionGroup
 )
 
-from frame_selection_core import load_frame_data, FrameSelectionData
-
-
-@dataclass
-class SelectionParams:
-	"""Parameters for frame selection."""
-	concentration_percentile: float = 90.0
-	total_change_percentile: float = 60.0
-	entropy_percentile: float = 40.0
-	temporal_window: int = 5
-	min_spacing: int = 5
-
-	def copy(self) -> "SelectionParams":
-		return SelectionParams(
-			concentration_percentile=self.concentration_percentile,
-			total_change_percentile=self.total_change_percentile,
-			entropy_percentile=self.entropy_percentile,
-			temporal_window=self.temporal_window,
-			min_spacing=self.min_spacing)
+from frame_selection_core import (
+	SelectionParams,
+	FrameSelectionData,
+	collect_frames,
+	compute_cache_key,
+	load_cached_embeddings,
+	create_frame_selection_data,
+	DEFAULT_MODEL,
+)
 
 
 class ThumbnailWidget(QLabel):
@@ -451,8 +440,7 @@ class ParameterPanel(QWidget):
 		"""Update selection statistics."""
 		self.stats_label.setText(
 			f"Selected for processing: {selected_for_processing} / {total} "
-			f"({100*selected_for_processing/total:.1f}%)"
-		)
+			f"({100*selected_for_processing/total:.1f}%)")
 		
 		diff_parts = []
 		if added > 0:
@@ -583,19 +571,32 @@ class MainWindow(QMainWindow):
 		progress.show()
 		QApplication.processEvents()
 		
-		self.data = load_frame_data(self.input_dir, temporal_window=self.current_params.temporal_window)
-		
-		progress.close()
-		
-		if self.data is None:
-			QMessageBox.critical(
-				self,
-				"Error",
-				f"No embedding cache found in {self.input_dir}\n\n"
-				"Run select_frames_vit.py first to generate embeddings cache."
-			)
+		# Collect frames and try to load from cache
+		frames = collect_frames(self.input_dir)
+		if len(frames) < 2:
+			progress.close()
+			QMessageBox.critical(self, "Error", f"Need at least 2 frames in {self.input_dir}")
 			QTimer.singleShot(100, self.close)
 			return
+		
+		cache_dir = self.input_dir / '.embedding_cache'
+		cache_key = compute_cache_key(DEFAULT_MODEL, frames, normalize=True)
+		embeddings = load_cached_embeddings(cache_dir, cache_key, DEFAULT_MODEL, normalize=True)
+		
+		if embeddings is None:
+			progress.close()
+			QMessageBox.critical(self, "Error",
+				f"No embedding cache found in {self.input_dir}\n\n"
+				"Run select_frames_vit.py first to generate embeddings cache.")
+			QTimer.singleShot(100, self.close)
+			return
+		
+		self.data = create_frame_selection_data(
+			frames,
+			embeddings,
+			temporal_window=self.current_params.temporal_window)
+		
+		progress.close()
 		
 		# Initialize UI
 		self.thumbnail_grid.set_frame_count(len(self.data))
@@ -620,7 +621,7 @@ class MainWindow(QMainWindow):
 				break
 			
 			path = self.data.get_frame_path(i)
-			frame_num = self.data.frames[i][0]  # Get frame number from tuple
+			frame_num = self.data.get_frame_number(i)
 			pixmap = QPixmap(str(path))
 			if not pixmap.isNull():
 				self.thumbnail_grid.set_thumbnail(i, pixmap, frame_num)
@@ -648,8 +649,7 @@ class MainWindow(QMainWindow):
 			self.current_params.concentration_percentile,
 			self.current_params.total_change_percentile,
 			self.current_params.entropy_percentile,
-			self.current_params.min_spacing
-		)
+			self.current_params.min_spacing)
 		self.current_processing_selection = set(selected_indices)
 		
 		self._ensure_preview_selection()
@@ -662,8 +662,7 @@ class MainWindow(QMainWindow):
 			len(self.current_processing_selection),
 			len(self.data),
 			len(added),
-			len(removed)
-		)
+			len(removed))
 		
 		self.param_panel.update_previous_display(self.previous_params)
 
@@ -707,8 +706,7 @@ class MainWindow(QMainWindow):
 		self.thumbnail_grid.update_states(
 			self.current_processing_selection,
 			self.previous_processing_selection,
-			self.selected_for_preview_index
-		)
+			self.selected_for_preview_index)
 
 	def _show_preview(self, index: int):
 		if self.data is None:
@@ -716,7 +714,7 @@ class MainWindow(QMainWindow):
 		
 		path = self.data.get_frame_path(index)
 		filename = self.data.get_frame_filename(index)
-		frame_number = self.data.frames[index][0]
+		frame_number = self.data.get_frame_number(index)
 		selected_for_processing = index in self.current_processing_selection
 		self.preview_panel.set_image(path, filename, frame_number, selected_for_processing)
 
@@ -907,7 +905,7 @@ def main():
 	# Additional stylesheet for specific widgets
 	app.setStyleSheet("""
 		QGroupBox {
-			border: 1px solid #444;
+			border: 1px solid palette(mid);
 			border-radius: 4px;
 			margin-top: 8px;
 			padding-top: 8px;
@@ -918,71 +916,6 @@ def main():
 			left: 8px;
 			padding: 0 4px;
 		}
-		/*
-		QMainWindow, QWidget {
-			background-color: #2b2b2b;
-			color: #ddd;
-		}
-		QGroupBox {
-			border: 1px solid #444;
-			border-radius: 4px;
-			margin-top: 8px;
-			padding-top: 8px;
-			font-weight: bold;
-		}
-		QGroupBox::title {
-			subcontrol-origin: margin;
-			left: 8px;
-			padding: 0 4px;
-		}
-		QPushButton {
-			background-color: #444;
-			border: 1px solid #555;
-			border-radius: 4px;
-			padding: 6px 12px;
-		}
-		QPushButton:hover {
-			background-color: #555;
-		}
-		QPushButton:pressed {
-			background-color: #333;
-		}
-		QSlider::groove:horizontal {
-			height: 6px;
-			background: #444;
-			border-radius: 3px;
-		}
-		QSlider::handle:horizontal {
-			width: 16px;
-			margin: -5px 0;
-			background: #888;
-			border-radius: 8px;
-		}
-		QSlider::handle:horizontal:hover {
-			background: #aaa;
-		}
-		QSpinBox, QDoubleSpinBox {
-			background-color: #333;
-			border: 1px solid #444;
-			border-radius: 3px;
-			padding: 4px;
-		}
-		QScrollArea {
-			border: none;
-		}
-		QScrollBar:vertical {
-			background: #333;
-			width: 12px;
-		}
-		QScrollBar::handle:vertical {
-			background: #555;
-			border-radius: 6px;
-			min-height: 20px;
-		}
-		QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-			height: 0;
-		}
-				   */
 	""")
 	
 	window = MainWindow(input_dir)
