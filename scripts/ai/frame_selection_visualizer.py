@@ -8,6 +8,7 @@ Requires embeddings cache to be pre-computed by select_frames_vit.py
 
 import sys
 import argparse
+import shutil
 from pathlib import Path
 from typing import List, Set, Optional
 
@@ -15,7 +16,8 @@ from PySide6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 	QLabel, QSlider, QPushButton, QScrollArea, QGridLayout,
 	QSplitter, QProgressDialog, QMessageBox, QGroupBox,
-	QSpinBox, QDoubleSpinBox, QAbstractSpinBox, QCheckBox, QStyleFactory
+	QSpinBox, QDoubleSpinBox, QAbstractSpinBox, QCheckBox, QStyleFactory,
+	QFileDialog
 )
 from PySide6.QtCore import Qt, Signal, QSize, QThread, QTimer, QRect
 from PySide6.QtGui import (
@@ -23,6 +25,7 @@ from PySide6.QtGui import (
 	QAction, QActionGroup
 )
 
+from utils import prepare_output_dir
 from frame_selection_core import (
 	SelectionParams,
 	FrameSelectionData,
@@ -512,9 +515,10 @@ class PreviewPanel(QWidget):
 class MainWindow(QMainWindow):
 	"""Main application window."""
 	
-	def __init__(self, input_dir: Path):
+	def __init__(self, input_dir: Optional[Path] = None, output_dir: Optional[Path] = None):
 		super().__init__()
 		self.input_dir = input_dir
+		self.output_dir = output_dir
 		self.data: Optional[FrameSelectionData] = None
 		self.current_processing_selection: Set[int] = set()
 		self.previous_processing_selection: Set[int] = set()
@@ -523,14 +527,22 @@ class MainWindow(QMainWindow):
 		self.previous_params = SelectionParams()
 		
 		self.setup_ui()
-		self.setWindowTitle(f"Frame Selection Visualizer - {input_dir.name}")
+		self._update_window_title()
 		self._init_menubar()
 		self._init_shortcuts()
 		self.param_panel.connect_value_changes(self._on_params_changed, self._on_slider_released)
 		self.param_panel.auto_apply_checkbox.stateChanged.connect(self._on_auto_apply_toggled)
 		
-		# Load data after UI is ready
-		QTimer.singleShot(100, self.load_data)
+		# Load data after UI is ready if input_dir is provided
+		if self.input_dir is not None:
+			QTimer.singleShot(100, self.load_data)
+	
+	def _update_window_title(self):
+		"""Update window title based on current input directory."""
+		if self.input_dir is not None:
+			self.setWindowTitle(f"Frame Selection Visualizer - {self.input_dir.absolute()}")
+		else:
+			self.setWindowTitle("Frame Selection Visualizer - (no input loaded)")
 	
 	def setup_ui(self):
 		# Central widget with splitter
@@ -575,8 +587,7 @@ class MainWindow(QMainWindow):
 		frames = collect_frames(self.input_dir)
 		if len(frames) < 2:
 			progress.close()
-			QMessageBox.critical(self, "Error", f"Need at least 2 frames in {self.input_dir}")
-			QTimer.singleShot(100, self.close)
+			QMessageBox.critical(self, "Error", f"Need at least 2 frames in {self.input_dir}\n\nTry opening a different directory.")
 			return
 		
 		cache_dir = self.input_dir / '.embedding_cache'
@@ -588,7 +599,6 @@ class MainWindow(QMainWindow):
 			QMessageBox.critical(self, "Error",
 				f"No embedding cache found in {self.input_dir}\n\n"
 				"Run select_frames_vit.py first to generate embeddings cache.")
-			QTimer.singleShot(100, self.close)
 			return
 		
 		self.data = create_frame_selection_data(
@@ -665,6 +675,9 @@ class MainWindow(QMainWindow):
 			len(removed))
 		
 		self.param_panel.update_previous_display(self.previous_params)
+		
+		# Enable save action once data is loaded
+		self.save_action.setEnabled(len(self.current_processing_selection) > 0)
 
 	def _on_params_changed(self):
 		"""Auto-apply when enabled to keep selection live."""
@@ -753,6 +766,20 @@ class MainWindow(QMainWindow):
 		menubar = self.menuBar()
 
 		file_menu = menubar.addMenu("&File")
+		
+		open_action = QAction("&Open", self)
+		open_action.setShortcut(QKeySequence.Open)
+		open_action.triggered.connect(self._on_file_open)
+		file_menu.addAction(open_action)
+		
+		save_action = QAction("&Save", self)
+		save_action.setShortcut(QKeySequence.Save)
+		save_action.triggered.connect(self._on_file_save)
+		self.save_action = save_action  # Store for enabling/disabling
+		file_menu.addAction(save_action)
+		
+		file_menu.addSeparator()
+		
 		exit_action = QAction("E&xit", self)
 		exit_action.triggered.connect(self.close)
 		file_menu.addAction(exit_action)
@@ -779,6 +806,9 @@ class MainWindow(QMainWindow):
 		about_action = QAction("&About", self)
 		about_action.triggered.connect(self._show_about)
 		help_menu.addAction(about_action)
+		
+		# Initially disable save action if no data loaded
+		self.save_action.setEnabled(self.data is not None)
 
 	def _apply_theme(self, style_name: str, color_scheme: str):
 		"""Apply color scheme first, then style."""
@@ -787,6 +817,90 @@ class MainWindow(QMainWindow):
 		else:
 			QApplication.styleHints().setColorScheme(Qt.ColorScheme.Dark)
 		QApplication.setStyle(style_name)
+
+	def _on_file_open(self):
+		"""Handle File > Open to select a new input directory."""
+		folder = QFileDialog.getExistingDirectory(self, "Open Frame Directory", str(self.input_dir) if self.input_dir else "")
+		if not folder:
+			return
+		
+		input_dir = Path(folder)
+		if not input_dir.exists():
+			QMessageBox.critical(self, "Error", f"Directory does not exist: {input_dir}")
+			return
+		
+		# Update input directory and reload data
+		self.input_dir = input_dir
+		self._update_window_title()
+		self.load_data()
+
+	def _on_file_save(self):
+		"""Handle File > Save to export selected frames."""
+		if self.data is None or len(self.current_processing_selection) == 0:
+			QMessageBox.warning(self, "Warning", "No frames selected for saving.")
+			return
+		
+		folder = QFileDialog.getExistingDirectory(
+			self,
+			"Select Output Directory",
+			str(self.output_dir) if self.output_dir else ""
+		)
+		if not folder:
+			return
+		
+		output_dir = Path(folder).resolve()
+		
+		# Prevent saving to the same directory as input frames
+		if output_dir == self.input_dir.resolve():
+			QMessageBox.critical(self, "Error", "Output directory cannot be the same as the input directory.")
+			return
+		
+		# Check if directory is empty and ask for overwrite confirmation
+		try:
+			next(output_dir.iterdir())
+			# Directory is not empty
+			reply = QMessageBox.question(self, "Directory Not Empty",
+				f"The directory '{output_dir.name}' is not empty.\n\nDelete all files and proceed?",
+				QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+			if reply != QMessageBox.StandardButton.Yes:
+				return
+			
+			# Use prepare_output_dir to clear matching files
+			try:
+				prepare_output_dir(str(output_dir), ['*.png', '*.jpg', '*.jpeg', '*.webp'])
+			except RuntimeError as e:
+				QMessageBox.critical(self, "Error", f"Failed to clear directory: {e}")
+				return
+		except StopIteration:
+			# Directory is empty
+			output_dir.mkdir(parents=True, exist_ok=True)
+		
+		# Copy selected frames
+		progress = QProgressDialog("Saving frames...", "Cancel", 0, len(self.current_processing_selection), self)
+		progress.setWindowModality(Qt.WindowModality.WindowModal)
+		progress.setMinimumDuration(0)
+		
+		copied = 0
+		for idx in sorted(self.current_processing_selection):
+			if progress.wasCanceled():
+				break
+			
+			src_path = self.data.frames[idx]
+			dest_path = output_dir / src_path.name
+			try:
+				shutil.copy2(src_path, dest_path)
+				copied += 1
+			except Exception as e:
+				QMessageBox.critical(self, "Error", f"Failed to copy {src_path.name}: {e}")
+				progress.close()
+				return
+			
+			progress.setValue(copied)
+			QApplication.processEvents()
+		
+		progress.close()
+		self.output_dir = output_dir
+		QMessageBox.information(self, "Success", f"Saved {copied} frames to:\n{output_dir}")
 
 	def _show_about(self):
 		QMessageBox.about(self, "About", "Hello world!")
@@ -876,23 +990,18 @@ def main():
 	parser = argparse.ArgumentParser(
 		description="Interactive frame selection parameter tuning"
 	)
-	parser.add_argument(
-		"-i", "--input-dir",
-		type=str,
-		required=True,
-		help="Directory containing input frames (must have embedding cache)"
-	)
-	parser.add_argument(
-		"--thumbnail-size",
-		type=int,
-		default=80,
-		help="Thumbnail size in pixels (default: 80)"
-	)
+	parser.add_argument("-i", "--input-dir", type=str, default=None,
+		help="Directory containing input frames (must have embedding cache)")
+	parser.add_argument("-o", "--output-dir", type=str, default=None,
+		help="Directory where selected frames will be saved")
+	parser.add_argument("--thumbnail-size", type=int, default=80,
+		help="Thumbnail size in pixels (default: 80)")
 	
 	args = parser.parse_args()
-	input_dir = Path(args.input_dir)
+	input_dir = Path(args.input_dir) if args.input_dir else None
+	output_dir = Path(args.output_dir) if args.output_dir else None
 	
-	if not input_dir.exists():
+	if input_dir is not None and not input_dir.exists():
 		print(f"Error: Input directory does not exist: {input_dir}")
 		return 1
 	
@@ -918,7 +1027,7 @@ def main():
 		}
 	""")
 	
-	window = MainWindow(input_dir)
+	window = MainWindow(input_dir, output_dir)
 	window.showMaximized()
 	
 	return app.exec()

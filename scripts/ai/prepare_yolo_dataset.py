@@ -23,6 +23,8 @@ import imagehash
 from PIL import Image
 import yaml
 
+from utils import prepare_output_dir
+
 # Leave the debugging code here for easy enabling when needed
 # import debugpy
 # debugpy.listen(5678) # default
@@ -215,26 +217,6 @@ def write_debug_image(
 	cv2.imwrite(output_path, img)
 
 
-def prepare_output_dir(path: str, overwrite: bool) -> None:
-	"""Ensure output dir exists and is empty; clear when overwrite is set."""
-	if not os.path.exists(path):
-		os.makedirs(path)
-		return
-
-	contents = os.listdir(path)
-	if not contents:
-		return
-
-	if not overwrite:
-		print(f"Error: output directory '{path}' is not empty. Use --overwrite to clear it.")
-		raise SystemExit(1)
-
-	try:
-		shutil.rmtree(path)
-		os.makedirs(path)
-	except Exception as e:
-		print(f"Error: failed to clear directory '{path}': {e}")
-		raise SystemExit(1)
 
 
 def collect_image_files(image_dir: str, exts: Tuple[str, ...]) -> Dict[int, str]:
@@ -396,9 +378,14 @@ def main() -> None:
 		raise SystemExit(1)
 
 	# Prepare output directories
-	prepare_output_dir(args.output_dir, args.overwrite)
-	if args.debug_by_drawing:
-		prepare_output_dir(args.debug_by_drawing, args.overwrite)
+	overwrite_globs = ['*.txt'] if args.overwrite else None
+	try:
+		prepare_output_dir(args.output_dir, overwrite_globs)
+		if args.debug_by_drawing:
+			prepare_output_dir(args.debug_by_drawing, ['*.png', '*.jpg', '*.jpeg'] if args.overwrite else None)
+	except Exception as e:
+		print(f"Error: {e}")
+		raise SystemExit(1)
 
 	# Track per-label how many images contain that label (each image counted once per label)
 	label_image_counts: Dict[str, int] = {}

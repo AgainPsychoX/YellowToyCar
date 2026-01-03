@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
+from utils import prepare_output_dir
 from frame_selection_core import (
 	DEFAULT_MODEL,
 	EPSILON,
@@ -75,8 +76,10 @@ Examples:
 		help='Apply diversity pruning using farthest-point sampling')
 	parser.add_argument('--no-l2-normalize', action='store_true',
 		help='Skip L2 normalization of patch embeddings')
-	parser.add_argument('--overwrite', action='store_true',
-		help='Overwrite output directory if it exists')
+	parser.add_argument('--overwrite', nargs='*', default=None, metavar='PATTERN',
+		help=('Allow overwriting files in non-empty output directory. '
+			'Without patterns, uses defaults: *.png *.jpg *.jpeg *.webp. '
+			'With patterns, only deletes matching files (e.g., --overwrite "*.log" "*.txt")'))
 	parser.add_argument('--cache-dir', type=str, default=None,
 		help='Directory for caching embeddings (default: <input-dir>/.embedding_cache)')
 	parser.add_argument('--force', action='store_true',
@@ -87,6 +90,8 @@ Examples:
 	parser.add_argument('--align', type=str, default='center', choices=['center', 'top', 'bottom', 'left', 'right'],
 		help='Alignment for crop/pad along the adjusted axis. '
 			'top/bottom for portrait, left/right for landscape. Default: center')
+	parser.add_argument('--save-metrics', action='store_true',
+		help='Write frame metrics to CSV file in output directory')
 
 	return parser.parse_args()
 
@@ -123,7 +128,13 @@ def main():
 		print(f"Error: Input directory does not exist: {input_dir}")
 		raise SystemExit(1)
 
-	prepare_output_dir(output_dir, args.overwrite)
+	if args.overwrite is not None and len(args.overwrite) == 0:
+		args.overwrite = ['*.png', '*.jpg', '*.jpeg', '*.webp']
+	try:
+		prepare_output_dir(str(output_dir), args.overwrite)
+	except Exception as e:
+		print(f"Error: {e}")
+		raise SystemExit(1)
 
 	print(f"\nCollecting frames from: {input_dir}")
 	frames = collect_frames(input_dir)
@@ -243,31 +254,32 @@ def main():
 		dest_path = output_dir / path.name
 		shutil.copy2(path, dest_path)
 
-	csv_path = output_dir / 'frame_metrics.csv'
-	print(f"\nSaving metrics to: {csv_path}")
+	if args.save_metrics:
+		csv_path = output_dir / 'frame_metrics.csv'
+		print(f"\nSaving metrics to: {csv_path}")
 
-	with open(csv_path, 'w', newline='') as f:
-		writer = csv.writer(f)
-		writer.writerow([
-			'frame_index',
-			'frame_number',
-			'filename',
-			'total_change',
-			'concentration',
-			'entropy',
-			'selected'
-		])
+		with open(csv_path, 'w', newline='') as f:
+			writer = csv.writer(f)
+			writer.writerow([
+				'frame_index',
+				'frame_number',
+				'filename',
+				'total_change',
+				'concentration',
+				'entropy',
+				'selected'
+			])
 
-		for i, path in enumerate(frames):
-			if i == 0:
-				tc, conc, ent = None, None, None
-			else:
-				tc = float(data.total_change[i - 1])
-				conc = float(data.concentration[i - 1])
-				ent = float(data.entropy[i - 1])
+			for i, path in enumerate(frames):
+				if i == 0:
+					tc, conc, ent = None, None, None
+				else:
+					tc = float(data.total_change[i - 1])
+					conc = float(data.concentration[i - 1])
+					ent = float(data.entropy[i - 1])
 
-			selected = 'yes' if i in final_indices else 'no'
-			writer.writerow([i, i + 1, path.name, tc, conc, ent, selected])
+				selected = 'yes' if i in final_indices else 'no'
+				writer.writerow([i, i + 1, path.name, tc, conc, ent, selected])
 
 	print("\n" + "=" * 60)
 	print("SUMMARY")
@@ -275,8 +287,8 @@ def main():
 	print(f"Input frames: {len(frames)}")
 	print(f"Selected frames: {len(final_indices)} ({100 * len(final_indices) / len(frames):.1f}%)")
 	print(f"Output directory: {output_dir}")
-	print(f"Metrics CSV: {csv_path}")
-
+	if args.save_metrics:
+		print(f"Metrics CSV: {output_dir / 'frame_metrics.csv'}")
 	if len(final_indices) > 0:
 		selected_frame_numbers = [int(i + 1) for i in final_indices]
 		print(f"\nSelected frame numbers: {selected_frame_numbers[:10]}", end='')
