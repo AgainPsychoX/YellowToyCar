@@ -6,23 +6,25 @@ Interactive GUI for tuning frame selection parameters.
 Requires embeddings cache to be pre-computed by select_frames_vit.py
 """
 
+import json
 import sys
 import argparse
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Set, Optional
+from typing import Callable, Dict, List, Set, Optional, Tuple
 
 from PySide6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 	QLabel, QSlider, QPushButton, QScrollArea, QGridLayout,
 	QSplitter, QProgressDialog, QMessageBox, QGroupBox,
 	QSpinBox, QDoubleSpinBox, QAbstractSpinBox, QCheckBox, QStyleFactory,
-	QFileDialog
+	QFileDialog, QDialog, QDialogButtonBox, QFormLayout
 )
-from PySide6.QtCore import Qt, Signal, QSize, QThread, QTimer, QRect
+from PySide6.QtCore import Qt, Signal, QSize, QThread, QTimer, QRect, QPoint
 from PySide6.QtGui import (
 	QPixmap, QColor, QPainter, QPen, QFont, QShortcut, QKeySequence,
-	QAction, QActionGroup
+	QAction, QActionGroup, QBrush, QPolygon
 )
 
 from utils import prepare_output_dir
@@ -37,6 +39,262 @@ from frame_selection_core import (
 )
 
 
+# ==============================================================================
+# Annotation Data Structures and Helpers (adapted from prepare_yolo_dataset.py)
+# ==============================================================================
+
+# Default label colors for common annotations (for now hardcoded)
+DEFAULT_LABEL_COLORS = {
+	"none": QColor(114, 114, 121),
+	"close": QColor(255, 0, 0),
+	"away": QColor(0, 255, 0),
+	"special": QColor(238, 129, 234),
+	"left-front": QColor(0, 26, 128),
+	"left-back": QColor(0, 26, 128),
+	"right-front": QColor(0, 225, 255),
+	"right-back": QColor(0, 225, 255),
+}
+
+
+def _collect_tracks(task_data: dict) -> List[dict]:
+	"""Extract videorectangle tracks from Label Studio task data."""
+	tracks = []
+	annotations = task_data.get('annotations', [])
+	if not annotations:
+		return tracks
+	for ann in annotations[0].get('result', []):
+		if ann.get('type') == 'videorectangle':
+			val = ann.get('value', {})
+			seq = val.get('sequence', [])
+			labels = val.get('labels', [])
+			if seq and labels:
+				tracks.append({'sequence': seq, 'labels': labels})
+	return tracks
+
+
+def build_frame_bboxes(
+	tracks: List[dict], 
+	frame_offset: int = 1
+) -> Tuple[Dict[int, List[Tuple[List[str], float, float, float, float]]], Set[int]]:
+	"""
+	Return mapping frame_num (1-based with offset) -> list of (labels, x%, y%, w%, h%),
+	and a set of keyframe indices (frame numbers that are actual keyframes in annotation).
+
+	For each keyframe:
+	- If disabled: add as a single frame (no interpolation)
+	- If enabled: interpolate to next keyframe (enabled or disabled)
+	- Last enabled keyframe with no successor: add as single frame
+	
+	Args:
+		tracks: List of track dicts with 'sequence' and 'labels'
+		frame_offset: Offset to add to frame numbers (default 1 for Label Studio 0-based to 1-based)
+	"""
+	frame_bboxes: Dict[int, List[Tuple[List[str], float, float, float, float]]] = {}
+	keyframe_frame_numbers: Set[int] = set()
+
+	for track in tracks:
+		seq = sorted(track['sequence'], key=lambda s: s.get('frame', 0))
+		labels = track['labels']
+
+		for i, kf in enumerate(seq):
+			kf_frame_num = kf['frame'] + frame_offset
+			keyframe_frame_numbers.add(kf_frame_num)
+			
+			if not kf.get('enabled', False):
+				# Disabled keyframe: just add it as a single frame
+				frame_bboxes.setdefault(kf_frame_num, []).append(
+					(labels, kf['x'], kf['y'], kf['width'], kf['height']))
+			else:
+				# Enabled keyframe: interpolate to next keyframe if it exists
+				if i + 1 < len(seq):
+					kf2 = seq[i + 1]
+					a_frame = kf['frame']
+					b_frame = kf2['frame']
+					for f in range(a_frame, b_frame):
+						t = (f - a_frame) / (b_frame - a_frame) if b_frame > a_frame else 0.0
+						x = kf['x'] + (kf2['x'] - kf['x']) * t
+						y = kf['y'] + (kf2['y'] - kf['y']) * t
+						w = kf['width'] + (kf2['width'] - kf['width']) * t
+						h = kf['height'] + (kf2['height'] - kf['height']) * t
+						frame_bboxes.setdefault(f + frame_offset, []).append((labels, x, y, w, h))
+				else:
+					# Last keyframe: just add it
+					frame_bboxes.setdefault(kf_frame_num, []).append(
+						(labels, kf['x'], kf['y'], kf['width'], kf['height']))
+
+	return frame_bboxes, keyframe_frame_numbers
+
+
+@dataclass
+class AnnotationData:
+	"""Container for loaded Label Studio annotations."""
+	json_path: Path
+	task_id: int
+	frame_offset: int
+	# frame_number (1-based) -> list of (labels, x%, y%, w%, h%)
+	frame_bboxes: Dict[int, List[Tuple[List[str], float, float, float, float]]] = field(default_factory=dict)
+	# Set of frame numbers that are keyframes
+	keyframe_frame_numbers: Set[int] = field(default_factory=set)
+	# label -> QColor
+	label_colors: Dict[str, QColor] = field(default_factory=dict)
+	
+	def get_bboxes_for_frame(self, frame_number: int) -> List[Tuple[List[str], float, float, float, float]]:
+		"""Get bounding boxes for a specific frame number."""
+		return self.frame_bboxes.get(frame_number, [])
+	
+	def is_keyframe(self, frame_number: int) -> bool:
+		"""Check if a frame number is a keyframe."""
+		return frame_number in self.keyframe_frame_numbers
+	
+	def has_annotations(self, frame_number: int) -> bool:
+		"""Check if a frame has any annotations."""
+		return frame_number in self.frame_bboxes
+	
+	def get_color_for_label(self, label: str) -> QColor:
+		"""Get color for a label, with fallback to defaults."""
+		label_lower = label.lower()
+		if label_lower in self.label_colors:
+			return self.label_colors[label_lower]
+		if label_lower in DEFAULT_LABEL_COLORS:
+			return DEFAULT_LABEL_COLORS[label_lower]
+		return QColor(255, 0, 0)  # Default red
+
+
+class AnnotationLoadDialog(QDialog):
+	"""Dialog for loading Label Studio annotations with task ID and frame offset."""
+	
+	def __init__(self, parent=None, default_offset: int = 1):
+		super().__init__(parent)
+		self.setWindowTitle("Load Label Studio Annotations")
+		self.setMinimumWidth(300)
+		
+		layout = QVBoxLayout(self)
+		form_layout = QFormLayout()
+		
+		# Task ID input
+		self.task_id_spin = QSpinBox()
+		self.task_id_spin.setRange(1, 999999)
+		self.task_id_spin.setValue(1)
+		self.task_id_spin.setToolTip("Task ID from Label Studio export")
+		form_layout.addRow("Task ID:", self.task_id_spin)
+		
+		# Frame offset input
+		self.offset_spin = QSpinBox()
+		self.offset_spin.setRange(-100, 100)
+		self.offset_spin.setValue(default_offset)
+		self.offset_spin.setToolTip(
+			"Offset to map Label Studio frame numbers to image file frame numbers.\n"
+			"Default 1 because Label Studio uses 0-based frames but image files are often 1-based.")
+		form_layout.addRow("Frame Offset:", self.offset_spin)
+		
+		layout.addLayout(form_layout)
+		
+		# Help text
+		help_label = QLabel(
+			"<small>Frame offset maps Label Studio frame numbers to image files.<br>"
+			"Example: offset=1 means LS frame 0 → image frame 1</small>")
+		help_label.setStyleSheet("color: #888;")
+		layout.addWidget(help_label)
+		
+		# Buttons
+		button_box = QDialogButtonBox(
+			QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+		button_box.accepted.connect(self.accept)
+		button_box.rejected.connect(self.reject)
+		layout.addWidget(button_box)
+	
+	def get_values(self) -> Tuple[int, int]:
+		"""Return (task_id, frame_offset)."""
+		return self.task_id_spin.value(), self.offset_spin.value()
+
+
+# ==============================================================================
+# Navigation Panel
+# ==============================================================================
+
+class NavigationPanel(QWidget):
+	"""Panel with navigation buttons for frames."""
+	
+	prev_frame = Signal()
+	next_frame = Signal()
+	prev_selected = Signal()
+	next_selected = Signal()
+	prev_keyframe = Signal()
+	next_keyframe = Signal()
+	toggle_force_select = Signal()
+	
+	def __init__(self):
+		super().__init__()
+		self.setup_ui()
+	
+	def setup_ui(self):
+		layout = QHBoxLayout(self)
+		layout.setContentsMargins(4, 4, 4, 4)
+		layout.setSpacing(4)
+		
+		# Frame navigation
+		self.prev_frame_btn = QPushButton("◀")
+		self.prev_frame_btn.setToolTip("Previous frame (Left Arrow)")
+		self.prev_frame_btn.setFixedWidth(32)
+		self.prev_frame_btn.clicked.connect(self.prev_frame.emit)
+		
+		self.next_frame_btn = QPushButton("▶")
+		self.next_frame_btn.setToolTip("Next frame (Right Arrow)")
+		self.next_frame_btn.setFixedWidth(32)
+		self.next_frame_btn.clicked.connect(self.next_frame.emit)
+		
+		# Selected frame navigation
+		self.prev_selected_btn = QPushButton("◀◀")
+		self.prev_selected_btn.setToolTip("Previous selected frame (Shift+Left)")
+		self.prev_selected_btn.setFixedWidth(40)
+		self.prev_selected_btn.clicked.connect(self.prev_selected.emit)
+		
+		self.next_selected_btn = QPushButton("▶▶")
+		self.next_selected_btn.setToolTip("Next selected frame (Shift+Right)")
+		self.next_selected_btn.setFixedWidth(40)
+		self.next_selected_btn.clicked.connect(self.next_selected.emit)
+		
+		# Keyframe navigation
+		self.prev_keyframe_btn = QPushButton("◁")
+		self.prev_keyframe_btn.setToolTip("Previous keyframe (Ctrl+Left)")
+		self.prev_keyframe_btn.setFixedWidth(32)
+		self.prev_keyframe_btn.clicked.connect(self.prev_keyframe.emit)
+		self.prev_keyframe_btn.setEnabled(False)  # Disabled until annotations loaded
+		
+		self.next_keyframe_btn = QPushButton("▷")
+		self.next_keyframe_btn.setToolTip("Next keyframe (Ctrl+Right)")
+		self.next_keyframe_btn.setFixedWidth(32)
+		self.next_keyframe_btn.clicked.connect(self.next_keyframe.emit)
+		self.next_keyframe_btn.setEnabled(False)  # Disabled until annotations loaded
+		
+		# Force select toggle button
+		self.force_select_btn = QPushButton("F")
+		self.force_select_btn.setToolTip("Toggle force select/unselect (F key)\nGreen=forced select, Red=forced unselect")
+		self.force_select_btn.setFixedWidth(32)
+		self.force_select_btn.clicked.connect(self.toggle_force_select.emit)
+		
+		# Add to layout with grouping
+		layout.addWidget(QLabel("Frame:"))
+		layout.addWidget(self.prev_frame_btn)
+		layout.addWidget(self.next_frame_btn)
+		layout.addSpacing(8)
+		layout.addWidget(QLabel("Selected:"))
+		layout.addWidget(self.prev_selected_btn)
+		layout.addWidget(self.next_selected_btn)
+		layout.addSpacing(8)
+		layout.addWidget(QLabel("Keyframe:"))
+		layout.addWidget(self.prev_keyframe_btn)
+		layout.addWidget(self.next_keyframe_btn)
+		layout.addSpacing(16)
+		layout.addWidget(self.force_select_btn)
+		layout.addStretch()
+	
+	def set_keyframe_navigation_enabled(self, enabled: bool):
+		"""Enable/disable keyframe navigation buttons."""
+		self.prev_keyframe_btn.setEnabled(enabled)
+		self.next_keyframe_btn.setEnabled(enabled)
+
+
 class ThumbnailWidget(QLabel):
 	"""Widget displaying a single thumbnail with selection state."""
 	
@@ -48,6 +306,10 @@ class ThumbnailWidget(QLabel):
 	COLOR_REMOVED = QColor(200, 60, 60, 180)        # Red - just removed
 	COLOR_NORMAL = QColor(80, 80, 80, 120)          # Gray - not selected
 	COLOR_PREVIEW = QColor(240, 200, 60, 200)       # Yellow - currently previewed
+	COLOR_FORCED_SELECT = QColor(0, 200, 100, 200)  # Bright green - manually forced select
+	COLOR_FORCED_UNSELECT = QColor(200, 100, 0, 200)  # Orange - manually forced unselect
+	COLOR_KEYFRAME = QColor(255, 200, 0, 220)       # Gold - keyframe marker
+	COLOR_HAS_ANNOTATION = QColor(150, 50, 200, 180)  # Purple - has annotation
 	
 	def __init__(self, index: int, thumbnail_size: int = 80):
 		super().__init__()
@@ -59,6 +321,13 @@ class ThumbnailWidget(QLabel):
 		self.is_added = False
 		self.is_removed = False
 		self.is_previewed = False
+		self.is_keyframe = False
+		self.has_annotation = False
+		self.is_forced_select = False
+		self.is_forced_unselect = False
+		# Cache for rendered thumbnail with current state
+		self._cached_display: Optional[QPixmap] = None
+		self._cache_valid = False
 		
 		# Account for space below for filename label
 		total_height = thumbnail_size + 8 + 20  # 20px for text
@@ -72,12 +341,30 @@ class ThumbnailWidget(QLabel):
 			self.thumbnail_size, self.thumbnail_size,
 			Qt.AspectRatioMode.KeepAspectRatio,
 			Qt.TransformationMode.SmoothTransformation)
+		self._cache_valid = False
 		self._update_display()
 	
 	def set_frame_number(self, frame_number: int):
 		"""Set the frame number label."""
 		self.frame_number = frame_number
+		self._cache_valid = False
 		self._update_display()
+	
+	def set_annotation_info(self, has_annotation: bool, is_keyframe: bool):
+		"""Set annotation-related display flags."""
+		if self.has_annotation != has_annotation or self.is_keyframe != is_keyframe:
+			self.has_annotation = has_annotation
+			self.is_keyframe = is_keyframe
+			self._cache_valid = False
+			self._update_display()
+	
+	def set_forced_state(self, forced_select: bool, forced_unselect: bool):
+		"""Set manual force select/unselect state."""
+		if self.is_forced_select != forced_select or self.is_forced_unselect != forced_unselect:
+			self.is_forced_select = forced_select
+			self.is_forced_unselect = forced_unselect
+			self._cache_valid = False
+			self._update_display()
 	
 	def set_state(
 		self,
@@ -87,11 +374,19 @@ class ThumbnailWidget(QLabel):
 		previewed: bool = False
 	):
 		"""Update selection/preview state."""
+		changed = (
+			self.is_selected_for_processing != selected_for_processing or
+			self.is_added != added or
+			self.is_removed != removed or
+			self.is_previewed != previewed
+		)
 		self.is_selected_for_processing = selected_for_processing
 		self.is_added = added
 		self.is_removed = removed
 		self.is_previewed = previewed
-		self._update_display()
+		if changed:
+			self._cache_valid = False
+			self._update_display()
 	
 	def _update_display(self):
 		"""Redraw with current state."""
@@ -106,8 +401,14 @@ class ThumbnailWidget(QLabel):
 		painter = QPainter(display)
 		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 		
-		# Determine border color
-		if self.is_added:
+		# Determine border color and width
+		if self.is_forced_select:
+			color = self.COLOR_FORCED_SELECT
+			border_width = 4
+		elif self.is_forced_unselect:
+			color = self.COLOR_FORCED_UNSELECT
+			border_width = 4
+		elif self.is_added:
 			color = self.COLOR_ADDED
 			border_width = 4
 		elif self.is_removed:
@@ -143,6 +444,25 @@ class ThumbnailWidget(QLabel):
 		y = (self.thumbnail_size + 8 - self.pixmap_original.height()) // 2
 		painter.drawPixmap(x, y, self.pixmap_original)
 		
+		# Draw keyframe triangle marker in top-right corner
+		if self.is_keyframe:
+			triangle_size = 12
+			triangle = QPolygon([
+				QPoint(self.thumbnail_size + 8 - triangle_size, 0),
+				QPoint(self.thumbnail_size + 8, 0),
+				QPoint(self.thumbnail_size + 8, triangle_size)
+			])
+			painter.setPen(Qt.PenStyle.NoPen)
+			painter.setBrush(QBrush(self.COLOR_KEYFRAME))
+			painter.drawPolygon(triangle)
+		
+		# Draw annotation indicator (small dot in top-left corner)
+		if self.has_annotation:
+			dot_size = 8
+			painter.setPen(Qt.PenStyle.NoPen)
+			painter.setBrush(QBrush(self.COLOR_HAS_ANNOTATION))
+			painter.drawEllipse(4, 4, dot_size, dot_size)
+		
 		# Draw frame number text below
 		if self.frame_number is not None:
 			painter.setPen(QColor(200, 200, 200, 200))
@@ -155,6 +475,8 @@ class ThumbnailWidget(QLabel):
 			painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, display_text)
 		
 		painter.end()
+		self._cached_display = display
+		self._cache_valid = True
 		self.setPixmap(display)
 	
 	def mousePressEvent(self, event):
@@ -166,11 +488,17 @@ class ThumbnailGrid(QScrollArea):
 	"""Scrollable grid of thumbnails."""
 	
 	thumbnail_clicked = Signal(int)
+	# Navigation signals for when grid has focus
+	navigate_prev_frame = Signal()
+	navigate_next_frame = Signal()
+	navigate_prev_selected = Signal()
+	navigate_next_selected = Signal()
 	
 	def __init__(self, thumbnail_size: int = 80):
 		super().__init__()
 		self.thumbnail_size = thumbnail_size
 		self.thumbnails: List[ThumbnailWidget] = []
+		self._focused_thumbnail_index: Optional[int] = None
 		
 		# Setup scroll area
 		self.setWidgetResizable(True)
@@ -224,6 +552,31 @@ class ThumbnailGrid(QScrollArea):
 			self.columns = new_columns
 			self._relayout()
 	
+	def keyPressEvent(self, event):
+		"""Handle arrow key navigation when grid or thumbnail has focus."""
+		if event.isAutoRepeat():
+			return super().keyPressEvent(event)
+		
+		key = event.key()
+		modifiers = event.modifiers()
+		
+		# Handle arrow keys for frame navigation
+		if modifiers == Qt.KeyboardModifier.NoModifier:
+			if key == Qt.Key.Key_Left:
+				self.navigate_prev_frame.emit()
+				return
+			elif key == Qt.Key.Key_Right:
+				self.navigate_next_frame.emit()
+				return
+			elif key == Qt.Key.Key_Up:
+				self.navigate_prev_selected.emit()
+				return
+			elif key == Qt.Key.Key_Down:
+				self.navigate_next_selected.emit()
+				return
+		
+		return super().keyPressEvent(event)
+	
 	def set_thumbnail(self, index: int, pixmap: QPixmap, frame_number: int = None):
 		"""Set pixmap and frame number for a specific thumbnail."""
 		if 0 <= index < len(self.thumbnails):
@@ -235,11 +588,15 @@ class ThumbnailGrid(QScrollArea):
 		self,
 		selected_for_processing: Set[int],
 		previous_selected_for_processing: Set[int],
-		selected_for_preview_index: Optional[int]
+		selected_for_preview_index: Optional[int],
+		forced_select: Optional[Set[int]] = None,
+		forced_unselect: Optional[Set[int]] = None
 	):
 		"""Update thumbnail states based on processing/preview selections."""
 		added = selected_for_processing - previous_selected_for_processing
 		removed = previous_selected_for_processing - selected_for_processing
+		forced_select = forced_select or set()
+		forced_unselect = forced_unselect or set()
 		
 		for i, thumb in enumerate(self.thumbnails):
 			is_selected = i in selected_for_processing
@@ -247,6 +604,22 @@ class ThumbnailGrid(QScrollArea):
 			is_removed = i in removed
 			is_previewed = selected_for_preview_index is not None and i == selected_for_preview_index
 			thumb.set_state(is_selected, is_added, is_removed, is_previewed)
+			thumb.set_forced_state(i in forced_select, i in forced_unselect)
+	
+	def update_annotation_info(
+		self,
+		annotation_data: Optional['AnnotationData'],
+		frame_number_getter: Callable[[int], int]
+	):
+		"""Update annotation indicators for all thumbnails."""
+		for i, thumb in enumerate(self.thumbnails):
+			if annotation_data is None:
+				thumb.set_annotation_info(False, False)
+			else:
+				frame_num = frame_number_getter(i)
+				has_ann = annotation_data.has_annotations(frame_num)
+				is_kf = annotation_data.is_keyframe(frame_num)
+				thumb.set_annotation_info(has_ann, is_kf)
 
 	def scroll_to_thumbnail(self, index: int):
 		"""Scroll to ensure thumbnail at index is visible."""
@@ -467,10 +840,16 @@ class ParameterPanel(QWidget):
 
 
 class PreviewPanel(QWidget):
-	"""Panel showing preview of selected image."""
+	"""Panel showing preview of selected image with optional annotation overlay."""
+	
+	show_annotations_changed = Signal(bool)
 	
 	def __init__(self):
 		super().__init__()
+		self._current_pixmap: Optional[QPixmap] = None
+		self._current_bboxes: List[Tuple[List[str], float, float, float, float]] = []
+		self._annotation_data: Optional[AnnotationData] = None
+		self._show_annotations = True
 		self.setup_ui()
 	
 	def setup_ui(self):
@@ -483,33 +862,135 @@ class PreviewPanel(QWidget):
 		self.preview_label.setStyleSheet("background-color: #222; border: 1px solid #444;")
 		layout.addWidget(self.preview_label, stretch=1)
 		
+		# Bottom row: info label + show annotations checkbox
+		bottom_layout = QHBoxLayout()
+		
 		# Info label
 		self.info_label = QLabel("Click a thumbnail to preview")
-		self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 		self.info_label.setStyleSheet("color: #888; padding: 8px;")
-		layout.addWidget(self.info_label)
+		bottom_layout.addWidget(self.info_label, stretch=1)
+		
+		# Show annotations checkbox
+		self.show_annotations_checkbox = QCheckBox("Show annotations")
+		self.show_annotations_checkbox.setChecked(True)
+		self.show_annotations_checkbox.setToolTip("Toggle display of bounding box annotations on preview")
+		self.show_annotations_checkbox.stateChanged.connect(self._on_show_annotations_changed)
+		bottom_layout.addWidget(self.show_annotations_checkbox)
+		
+		layout.addLayout(bottom_layout)
 	
-	def set_image(self, path: Path, filename: str, frame_number: int, selected_for_processing: bool):
-		"""Display an image along with its frame number."""
+	def _on_show_annotations_changed(self, state):
+		self._show_annotations = state == Qt.CheckState.Checked.value
+		self._refresh_display()
+		self.show_annotations_changed.emit(self._show_annotations)
+	
+	def set_annotation_data(self, annotation_data: Optional[AnnotationData]):
+		"""Set annotation data for drawing bboxes."""
+		self._annotation_data = annotation_data
+		self.show_annotations_checkbox.setEnabled(annotation_data is not None)
+	
+	def set_image(
+		self, 
+		path: Path, 
+		filename: str, 
+		frame_number: int, 
+		selected_for_processing: bool,
+		bboxes: Optional[List[Tuple[List[str], float, float, float, float]]] = None
+	):
+		"""Display an image along with its frame number and optional bounding boxes."""
 		pixmap = QPixmap(str(path))
 		if pixmap.isNull():
 			self.preview_label.setText("Failed to load image")
+			self._current_pixmap = None
 			return
 		
-		# Scale to fit
-		scaled = pixmap.scaled(
-			self.preview_label.size(),
+		self._current_pixmap = pixmap
+		self._current_bboxes = bboxes or []
+		self._refresh_display()
+		
+		status = "SELECTED for processing" if selected_for_processing else "not selected for processing"
+		bbox_info = f", {len(self._current_bboxes)} annotations" if self._current_bboxes else ""
+		self.info_label.setText(f"Frame {frame_number}: {filename} ({status}{bbox_info})")
+	
+	def _refresh_display(self):
+		"""Refresh the preview display with current pixmap and annotations."""
+		if self._current_pixmap is None:
+			return
+		
+		# Scale to fit the preview area
+		target_size = self.preview_label.size()
+		scaled = self._current_pixmap.scaled(
+			target_size,
 			Qt.AspectRatioMode.KeepAspectRatio,
 			Qt.TransformationMode.SmoothTransformation
 		)
-		self.preview_label.setPixmap(scaled)
 		
-		status = "SELECTED for processing" if selected_for_processing else "not selected for processing"
-		self.info_label.setText(f"Frame {frame_number}: {filename} ({status})")
+		# Draw bounding boxes if enabled and available
+		if self._show_annotations and self._current_bboxes and self._annotation_data:
+			# Calculate scale factor from original to scaled
+			scale_x = scaled.width() / self._current_pixmap.width()
+			scale_y = scaled.height() / self._current_pixmap.height()
+			
+			# Create a copy to draw on
+			display = QPixmap(scaled)
+			painter = QPainter(display)
+			painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+			
+			img_width = self._current_pixmap.width()
+			img_height = self._current_pixmap.height()
+			
+			for labels, x_pct, y_pct, w_pct, h_pct in self._current_bboxes:
+				# Convert percentage to pixel coordinates in original image
+				x = x_pct * img_width / 100.0
+				y = y_pct * img_height / 100.0
+				w = w_pct * img_width / 100.0
+				h = h_pct * img_height / 100.0
+				
+				# Scale to display coordinates
+				x_scaled = int(x * scale_x)
+				y_scaled = int(y * scale_y)
+				w_scaled = int(w * scale_x)
+				h_scaled = int(h * scale_y)
+				
+				# Get color for label
+				label_name = '-'.join(labels) if labels else "unknown"
+				color = self._annotation_data.get_color_for_label(labels[0] if labels else "")
+				
+				# Draw rectangle
+				pen = QPen(color, 2)
+				painter.setPen(pen)
+				painter.setBrush(Qt.BrushStyle.NoBrush)
+				painter.drawRect(x_scaled, y_scaled, w_scaled, h_scaled)
+				
+				# Draw label text
+				font = QFont("Arial", 10, QFont.Weight.Bold)
+				painter.setFont(font)
+				# Background for text
+				text_rect = painter.fontMetrics().boundingRect(label_name)
+				text_bg_rect = QRect(
+					x_scaled, 
+					max(0, y_scaled - text_rect.height() - 4),
+					text_rect.width() + 8,
+					text_rect.height() + 4
+				)
+				painter.fillRect(text_bg_rect, QColor(0, 0, 0, 150))
+				painter.setPen(color)
+				painter.drawText(
+					x_scaled + 4, 
+					max(text_rect.height(), y_scaled - 4), 
+					label_name
+				)
+			
+			painter.end()
+			self.preview_label.setPixmap(display)
+		else:
+			self.preview_label.setPixmap(scaled)
 	
 	def resizeEvent(self, event):
 		super().resizeEvent(event)
-		# Could refresh preview on resize, but skip for now
+		# Refresh display when resized to redraw at new size
+		self._refresh_display()
 
 
 class MainWindow(QMainWindow):
@@ -525,6 +1006,14 @@ class MainWindow(QMainWindow):
 		self.selected_for_preview_index: Optional[int] = None
 		self.current_params = SelectionParams()
 		self.previous_params = SelectionParams()
+		
+		# Annotation data
+		self.annotation_data: Optional[AnnotationData] = None
+		self.default_annotation_offset = 1
+		
+		# Manual force select/unselect
+		self.manually_selected: Set[int] = set()
+		self.manually_unselected: Set[int] = set()
 		
 		self.setup_ui()
 		self._update_window_title()
@@ -553,13 +1042,30 @@ class MainWindow(QMainWindow):
 		self.thumbnail_grid.thumbnail_clicked.connect(self.on_thumbnail_clicked)
 		splitter.addWidget(self.thumbnail_grid)
 		
-		# Right: preview + parameters
+		# Right: preview + navigation + parameters
 		right_panel = QWidget()
 		right_layout = QVBoxLayout(right_panel)
 		
 		# Preview at top
 		self.preview_panel = PreviewPanel()
 		right_layout.addWidget(self.preview_panel, stretch=1)
+		
+		# Navigation panel
+		self.nav_panel = NavigationPanel()
+		self.nav_panel.prev_frame.connect(self._nav_left)
+		self.nav_panel.next_frame.connect(self._nav_right)
+		self.nav_panel.prev_selected.connect(self._nav_prev_selected)
+		self.nav_panel.next_selected.connect(self._nav_next_selected)
+		self.nav_panel.prev_keyframe.connect(self._nav_prev_keyframe)
+		self.nav_panel.next_keyframe.connect(self._nav_next_keyframe)
+		self.nav_panel.toggle_force_select.connect(self._toggle_force_select)
+		right_layout.addWidget(self.nav_panel)
+		
+		# Thumbnail grid arrow key navigation
+		self.thumbnail_grid.navigate_prev_frame.connect(self._nav_left)
+		self.thumbnail_grid.navigate_next_frame.connect(self._nav_right)
+		self.thumbnail_grid.navigate_prev_selected.connect(self._nav_prev_selected)
+		self.thumbnail_grid.navigate_next_selected.connect(self._nav_next_selected)
 		
 		# Parameters at bottom
 		self.param_panel = ParameterPanel()
@@ -582,6 +1088,13 @@ class MainWindow(QMainWindow):
 		progress.setMinimumDuration(0)
 		progress.show()
 		QApplication.processEvents()
+		
+		# Clear existing annotations when loading new data
+		self.annotation_data = None
+		self.preview_panel.set_annotation_data(None)
+		self.nav_panel.set_keyframe_navigation_enabled(False)
+		self.manually_selected.clear()
+		self.manually_unselected.clear()
 		
 		# Collect frames and try to load from cache
 		frames = collect_frames(self.input_dir)
@@ -662,6 +1175,11 @@ class MainWindow(QMainWindow):
 			self.current_params.min_spacing)
 		self.current_processing_selection = set(selected_indices)
 		
+		# Apply manual force selections
+		self.current_processing_selection = (
+			(self.current_processing_selection | self.manually_selected) - self.manually_unselected
+		)
+		
 		self._ensure_preview_selection()
 		self._refresh_thumbnail_states()
 		self._show_current_preview()
@@ -719,7 +1237,9 @@ class MainWindow(QMainWindow):
 		self.thumbnail_grid.update_states(
 			self.current_processing_selection,
 			self.previous_processing_selection,
-			self.selected_for_preview_index)
+			self.selected_for_preview_index,
+			self.manually_selected,
+			self.manually_unselected)
 
 	def _show_preview(self, index: int):
 		if self.data is None:
@@ -729,7 +1249,13 @@ class MainWindow(QMainWindow):
 		filename = self.data.get_frame_filename(index)
 		frame_number = self.data.get_frame_number(index)
 		selected_for_processing = index in self.current_processing_selection
-		self.preview_panel.set_image(path, filename, frame_number, selected_for_processing)
+		
+		# Get bounding boxes for this frame if annotations are loaded
+		bboxes = None
+		if self.annotation_data is not None:
+			bboxes = self.annotation_data.get_bboxes_for_frame(frame_number)
+		
+		self.preview_panel.set_image(path, filename, frame_number, selected_for_processing, bboxes)
 
 	def _show_current_preview(self):
 		if self.data is None or self.selected_for_preview_index is None:
@@ -753,14 +1279,17 @@ class MainWindow(QMainWindow):
 		return isinstance(widget, (QSlider, QSpinBox, QDoubleSpinBox, QAbstractSpinBox))
 
 	def _init_shortcuts(self):
-		"""Register arrow key shortcuts for preview navigation."""
+		"""
+		Register non-arrow shortcuts for preview navigation.
+		
+		Arrow keys are handled in keyPressEvent() so they don't interfere with sliders and spinboxes that need them.
+		"""
 		self._shortcuts = []
-		self._shortcuts.append(self._make_shortcut(Qt.Key.Key_Left, self._nav_left))
-		self._shortcuts.append(self._make_shortcut(Qt.Key.Key_Right, self._nav_right))
-		self._shortcuts.append(self._make_shortcut(Qt.Key.Key_Up, self._nav_up))
-		self._shortcuts.append(self._make_shortcut(Qt.Key.Key_Down, self._nav_down))
 		self._shortcuts.append(self._make_shortcut_sequence("Shift+Left", self._nav_prev_selected))
 		self._shortcuts.append(self._make_shortcut_sequence("Shift+Right", self._nav_next_selected))
+		self._shortcuts.append(self._make_shortcut_sequence("Ctrl+Left", self._nav_prev_keyframe))
+		self._shortcuts.append(self._make_shortcut_sequence("Ctrl+Right", self._nav_next_keyframe))
+		self._shortcuts.append(self._make_shortcut(Qt.Key.Key_F, self._toggle_force_select))
 
 	def _init_menubar(self):
 		menubar = self.menuBar()
@@ -777,6 +1306,17 @@ class MainWindow(QMainWindow):
 		save_action.triggered.connect(self._on_file_save)
 		self.save_action = save_action  # Store for enabling/disabling
 		file_menu.addAction(save_action)
+		
+		file_menu.addSeparator()
+		
+		# Add Label Studio annotations action
+		load_annotations_action = QAction("Add Label Studio &Annotations...", self)
+		load_annotations_action.triggered.connect(self._on_load_annotations)
+		file_menu.addAction(load_annotations_action)
+		
+		clear_annotations_action = QAction("&Clear Annotations", self)
+		clear_annotations_action.triggered.connect(self._on_clear_annotations)
+		file_menu.addAction(clear_annotations_action)
 		
 		file_menu.addSeparator()
 		
@@ -907,13 +1447,13 @@ class MainWindow(QMainWindow):
 
 	def _make_shortcut(self, key: Qt.Key, handler):
 		sc = QShortcut(QKeySequence(key), self)
-		sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+		sc.setContext(Qt.ShortcutContext.WindowShortcut)
 		sc.activated.connect(handler)
 		return sc
 
 	def _make_shortcut_sequence(self, sequence: str, handler):
 		sc = QShortcut(QKeySequence(sequence), self)
-		sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+		sc.setContext(Qt.ShortcutContext.WindowShortcut)
 		sc.activated.connect(handler)
 		return sc
 
@@ -936,6 +1476,176 @@ class MainWindow(QMainWindow):
 
 	def _nav_next_selected(self):
 		self._navigate_to_neighbor_selected(previous=False)
+
+	def _nav_prev_keyframe(self):
+		self._navigate_to_neighbor_keyframe(previous=True)
+
+	def _nav_next_keyframe(self):
+		self._navigate_to_neighbor_keyframe(previous=False)
+
+	def _navigate_to_neighbor_keyframe(self, previous: bool):
+		"""Navigate to next/previous keyframe."""
+		if self.data is None or len(self.data) == 0:
+			return
+		if self._focused_widget_blocks_navigation():
+			return
+		if self.annotation_data is None:
+			return
+		
+		self._ensure_preview_selection()
+		if self.selected_for_preview_index is None:
+			return
+		
+		current_frame_num = self.data.get_frame_number(self.selected_for_preview_index)
+		keyframe_nums = sorted(self.annotation_data.keyframe_frame_numbers)
+		
+		if not keyframe_nums:
+			return
+		
+		if previous:
+			candidates = [kf for kf in keyframe_nums if kf < current_frame_num]
+			if candidates:
+				target_frame_num = candidates[-1]
+			else:
+				return
+		else:
+			candidates = [kf for kf in keyframe_nums if kf > current_frame_num]
+			if candidates:
+				target_frame_num = candidates[0]
+			else:
+				return
+		
+		# Find index for target frame number
+		for i in range(len(self.data)):
+			if self.data.get_frame_number(i) == target_frame_num:
+				self.set_selected_for_preview(i)
+				break
+
+	def _toggle_force_select(self):
+		"""Toggle force select/unselect for current preview frame."""
+		if self.data is None or self.selected_for_preview_index is None:
+			return
+		
+		idx = self.selected_for_preview_index
+		
+		# Cycle through states: normal -> forced select -> forced unselect -> normal
+		if idx in self.manually_selected:
+			# Currently forced select -> change to forced unselect
+			self.manually_selected.discard(idx)
+			self.manually_unselected.add(idx)
+		elif idx in self.manually_unselected:
+			# Currently forced unselect -> change to normal
+			self.manually_unselected.discard(idx)
+		else:
+			# Currently normal -> change to forced select
+			self.manually_selected.add(idx)
+		
+		# Re-apply selection to update states
+		self.apply_selection()
+
+	def _on_load_annotations(self):
+		"""Handle File > Add Label Studio Annotations."""
+		# Show file picker for JSON
+		json_path, _ = QFileDialog.getOpenFileName(
+			self,
+			"Select Label Studio JSON Export",
+			str(self.input_dir) if self.input_dir else "",
+			"JSON Files (*.json);;All Files (*)"
+		)
+		if not json_path:
+			return
+		
+		json_path = Path(json_path)
+		
+		# Load JSON to get available task IDs
+		try:
+			with open(json_path, 'r', encoding='utf-8') as f:
+				data = json.load(f)
+		except Exception as e:
+			QMessageBox.critical(self, "Error", f"Failed to load JSON file:\n{e}")
+			return
+		
+		if not isinstance(data, list) or len(data) == 0:
+			QMessageBox.critical(self, "Error", "JSON file does not contain any tasks.")
+			return
+		
+		# Get available task IDs
+		task_ids = [task.get('id') for task in data if task.get('id') is not None]
+		if not task_ids:
+			QMessageBox.critical(self, "Error", "No valid task IDs found in JSON.")
+			return
+		
+		# Show dialog for task ID and offset
+		dialog = AnnotationLoadDialog(self, self.default_annotation_offset)
+		if task_ids:
+			dialog.task_id_spin.setRange(min(task_ids), max(task_ids))
+			dialog.task_id_spin.setValue(task_ids[0])
+		
+		if dialog.exec() != QDialog.DialogCode.Accepted:
+			return
+		
+		task_id, frame_offset = dialog.get_values()
+		self.default_annotation_offset = frame_offset  # Remember for next time
+		
+		# Find the task
+		task_data = None
+		for task in data:
+			if task.get('id') == task_id:
+				task_data = task
+				break
+		
+		if task_data is None:
+			QMessageBox.critical(self, "Error", f"Task ID {task_id} not found in JSON file.")
+			return
+		
+		# Parse annotations
+		tracks = _collect_tracks(task_data)
+		if not tracks:
+			QMessageBox.warning(self, "Warning", 
+				f"No videorectangle annotations found for task {task_id}.")
+			return
+		
+		frame_bboxes, keyframe_frame_numbers = build_frame_bboxes(tracks, frame_offset)
+		
+		# Create annotation data
+		self.annotation_data = AnnotationData(
+			json_path=json_path,
+			task_id=task_id,
+			frame_offset=frame_offset,
+			frame_bboxes=frame_bboxes,
+			keyframe_frame_numbers=keyframe_frame_numbers,
+			label_colors=dict(DEFAULT_LABEL_COLORS)
+		)
+		
+		# Update UI
+		self.preview_panel.set_annotation_data(self.annotation_data)
+		self.nav_panel.set_keyframe_navigation_enabled(True)
+		
+		# Update thumbnail annotation indicators
+		if self.data is not None:
+			self.thumbnail_grid.update_annotation_info(
+				self.annotation_data,
+				lambda i: self.data.get_frame_number(i)
+			)
+		
+		# Refresh current preview to show annotations
+		self._show_current_preview()
+		
+		QMessageBox.information(self, "Annotations Loaded",
+			f"Loaded {len(frame_bboxes)} annotated frames with {len(keyframe_frame_numbers)} keyframes\n"
+			f"from task {task_id} (offset: {frame_offset})")
+
+	def _on_clear_annotations(self):
+		"""Handle File > Clear Annotations."""
+		self.annotation_data = None
+		self.preview_panel.set_annotation_data(None)
+		self.nav_panel.set_keyframe_navigation_enabled(False)
+		
+		# Clear thumbnail annotation indicators
+		if self.data is not None:
+			self.thumbnail_grid.update_annotation_info(None, lambda i: 0)
+		
+		self._show_current_preview()
 
 	def _navigate_to_neighbor_selected(self, previous: bool):
 		if self.data is None or len(self.data) == 0:
@@ -982,7 +1692,27 @@ class MainWindow(QMainWindow):
 		self.set_selected_for_preview(index)
 
 	def keyPressEvent(self, event):
-		"""Defer key handling; navigation handled via shortcuts to avoid double triggers."""
+		"""Handle arrow keys for navigation, but only if no widget that needs them has focus."""
+		if self._focused_widget_blocks_navigation():
+			return super().keyPressEvent(event)
+		
+		key = event.key()
+		modifiers = event.modifiers()
+		
+		# Handle plain arrow keys
+		if key == Qt.Key.Key_Left and modifiers == Qt.KeyboardModifier.NoModifier:
+			self._nav_left()
+			return
+		elif key == Qt.Key.Key_Right and modifiers == Qt.KeyboardModifier.NoModifier:
+			self._nav_right()
+			return
+		elif key == Qt.Key.Key_Up and modifiers == Qt.KeyboardModifier.NoModifier:
+			self._nav_up()
+			return
+		elif key == Qt.Key.Key_Down and modifiers == Qt.KeyboardModifier.NoModifier:
+			self._nav_down()
+			return
+		
 		return super().keyPressEvent(event)
 
 
