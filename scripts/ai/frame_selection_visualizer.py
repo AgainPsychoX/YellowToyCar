@@ -1678,7 +1678,7 @@ class MainWindow(QMainWindow):
 		# Edit menu with embedding generation
 		edit_menu = menubar.addMenu("&Edit")
 		
-		generate_embeddings_action = QAction("&Generate Embeddings...", self)
+		generate_embeddings_action = QAction("Generate &Embeddings...", self)
 		generate_embeddings_action.triggered.connect(lambda: self._generate_embeddings(force=True))
 		self.generate_embeddings_action = generate_embeddings_action
 		edit_menu.addAction(generate_embeddings_action)
