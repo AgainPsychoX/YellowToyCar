@@ -71,6 +71,58 @@ def _get_timm():
 	return _timm
 
 
+def estimate_optimal_batch_size(device_type: str = 'auto') -> int:
+	"""
+	Estimate optimal batch size based on available memory.
+	
+	Args:
+		device_type: 'auto' (detect), 'cuda', or 'cpu'
+	
+	Returns:
+		Recommended batch size between 1 and 64.
+	"""
+	if device_type == 'auto':
+		torch = _get_torch()
+		device_type = 'cuda' if torch.cuda.is_available() else 'cpu'
+	
+	try:
+		if device_type == 'cuda':
+			torch = _get_torch()
+			props = torch.cuda.get_device_properties(0)
+			gpu_memory_gb = props.total_memory / (1024 ** 3)
+			
+			# Reserve 1GB for model and misc, estimate ~200MB per image
+			available_for_batches = max(gpu_memory_gb - 1.0, 0.5)
+			batch_size = max(1, int(available_for_batches / 0.2))
+			return min(batch_size, 64)
+		else:
+			# CPU: use less aggressive batch size, estimate ~300MB per image
+			try:
+				import psutil
+				available_mb = psutil.virtual_memory().available / (1024 ** 2)
+				# Reserve 2GB for system/other apps
+				available_for_batches_mb = max(available_mb - 2048, 512)
+				batch_size = max(1, int(available_for_batches_mb / 300))
+				return min(batch_size, 32)
+			except Exception:
+				# Fallback if psutil unavailable
+				return 4
+	except Exception:
+		# Default fallback
+		return 8
+
+
+def get_common_timm_models() -> List[str]:
+	"""Return list of common ViT models available in timm."""
+	return [
+		'vit_small_patch16_224.dino',
+		'vit_base_patch16_224.dino',
+		'vit_base_patch16_224',
+		'vit_small_patch16_224',
+		'vit_large_patch16_224.augreg_in21k_ft_in1k',
+	]
+
+
 class TransformMode(Enum):
 	"""Image transform mode for resizing to target dimensions."""
 	CROP = 'crop'      # Resize larger dim, crop smaller (loses data)
@@ -202,6 +254,66 @@ def get_cache_path(cache_dir: Path, cache_key: str) -> Tuple[Path, Path]:
 	return tensor_path, meta_path
 
 
+def find_existing_cache_in_dir(cache_dir: Path) -> Optional[Tuple[dict, str]]:
+	"""
+	Find and load the first valid cache in directory.
+	
+	Returns:
+		Tuple of (metadata_dict, cache_key_str) or None if no valid cache found.
+	"""
+	if not cache_dir.exists():
+		return None
+	
+	try:
+		for meta_path in sorted(cache_dir.glob("embeddings_*.json")):
+			try:
+				with open(meta_path, 'r') as f:
+					meta = json.load(f)
+				
+				if meta.get('cache_version') == 1:
+					# Extract cache_key from filename (embeddings_XXXX.json -> XXXX)
+					cache_key = meta_path.stem.replace('embeddings_', '')
+					return meta, cache_key
+			except Exception:
+				continue
+	except Exception:
+		pass
+	
+	return None
+
+
+def format_cache_info(meta: dict) -> str:
+	"""Format cache metadata as human-readable string."""
+	model = meta.get('model', 'unknown')
+	normalize = meta.get('normalize', False)
+	frame_count = meta.get('frame_count', 0)
+	shape = meta.get('embedding_shape', [])
+	
+	norm_str = "normalized" if normalize else "not normalized"
+	shape_str = f"{shape[0]}x{shape[1]}x{shape[2]}" if len(shape) >= 3 else "unknown"
+	
+	return f"{model} ({frame_count} frames, {norm_str}, shape: {shape_str})"
+
+
+def clear_other_caches(cache_dir: Path, keep_key: str) -> None:
+	"""Remove all cache files except the one with keep_key."""
+	if not cache_dir.exists():
+		return
+	
+	try:
+		for pt_file in cache_dir.glob("embeddings_*.pt"):
+			key = pt_file.stem.replace('embeddings_', '')
+			if key != keep_key:
+				pt_file.unlink()
+		
+		for json_file in cache_dir.glob("embeddings_*.json"):
+			key = json_file.stem.replace('embeddings_', '')
+			if key != keep_key:
+				json_file.unlink()
+	except Exception as exc:
+		print(f"Warning: Failed to clear old caches: {exc}")
+
+
 def load_cached_embeddings(
 	cache_dir: Path,
 	cache_key: str,
@@ -246,6 +358,9 @@ def save_embeddings_cache(
 	tensor_path, meta_path = get_cache_path(cache_dir, cache_key)
 
 	try:
+		# Clear other cache files to save space (embeddings can be huge)
+		clear_other_caches(cache_dir, cache_key)
+		
 		torch = _get_torch()
 		torch.save(embeddings, tensor_path)
 
