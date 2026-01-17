@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Set, Optional, Tuple
 
+import threading
+
 from PySide6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 	QLabel, QSlider, QPushButton, QScrollArea, QGridLayout,
@@ -394,7 +396,7 @@ class EmbeddingGenerationWorker(QThread):
 		self.force = force
 		self.clear_others = clear_others
 		self._is_cancelled = False
-		self._mutex = __import__('threading').RLock()
+		self._mutex = threading.RLock()
 	
 	def cancel(self):
 		"""Request cancellation of ongoing work."""
@@ -415,9 +417,9 @@ class EmbeddingGenerationWorker(QThread):
 			
 			# Progress callback
 			def progress_callback(done: int, total: int):
-				# TODO: make sure cancellation works; maybe raise exception to stop?
-				if not self.is_cancelled():
-					self.progress.emit(done, total)
+				if self.is_cancelled():
+					raise InterruptedError("Embedding generation cancelled")
+				self.progress.emit(done, total)
 			
 			# Load or compute embeddings
 			embeddings, from_cache = load_or_compute_embeddings(
