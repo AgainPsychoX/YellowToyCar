@@ -229,12 +229,14 @@ class EmbeddingGenerationDialog(QDialog):
 		parent=None,
 		auto_batch_size: int = 8,
 		current_config: Optional[EmbeddingConfig] = None,
+		initial_force: bool = False,
 	):
 		super().__init__(parent)
 		self.setWindowTitle("Generate Embeddings")
 		self.setMinimumWidth(400)
 		self.auto_batch_size = auto_batch_size
 		self.initial_config = current_config
+		self.initial_force = initial_force
 		
 		layout = QVBoxLayout(self)
 		form_layout = QFormLayout()
@@ -290,6 +292,11 @@ class EmbeddingGenerationDialog(QDialog):
 		self.clear_others_checkbox.setToolTip("Remove other cache files to save disk space")
 		form_layout.addRow(self.clear_others_checkbox)
 		
+		# Force regenerate checkbox (allows user to choose whether to overwrite existing cache)
+		self.force_checkbox = QCheckBox("Force regenerate (overwrite existing cache)")
+		self.force_checkbox.setToolTip("Force regeneration even if a cache already exists")
+		form_layout.addRow(self.force_checkbox)
+		
 		layout.addLayout(form_layout)
 		
 		# Buttons
@@ -306,6 +313,7 @@ class EmbeddingGenerationDialog(QDialog):
 		"""Load previously selected settings from QSettings and current config."""
 		batch_size_pref = settings.value("embedding/batch_size", self.auto_batch_size, int)
 		clear_others_pref = settings.value("embedding/clear_others", True, bool)
+		force_pref = settings.value("embedding/force", self.initial_force, bool)
 
 		if self.initial_config.model not in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
 			self.model_combo.setCurrentText("Custom...")
@@ -318,6 +326,7 @@ class EmbeddingGenerationDialog(QDialog):
 		self.align_combo.setCurrentText(self.initial_config.transform.alignment.value)
 		self.batch_size_spin.setValue(batch_size_pref)
 		self.clear_others_checkbox.setChecked(clear_others_pref)
+		self.force_checkbox.setChecked(force_pref)
 	
 	def _save_preferences(self):
 		"""Save current settings to QSettings."""
@@ -328,6 +337,7 @@ class EmbeddingGenerationDialog(QDialog):
 		settings.setValue("embedding/alignment", config.transform.alignment.value)
 		settings.setValue("embedding/batch_size", self.batch_size_spin.value())
 		settings.setValue("embedding/clear_others", self.clear_others_checkbox.isChecked())
+		settings.setValue("embedding/force", self.force_checkbox.isChecked())
 	
 	def accept(self):
 		"""Override accept to save preferences."""
@@ -353,10 +363,6 @@ class EmbeddingGenerationDialog(QDialog):
 				self.align_combo.currentText(),
 			),
 		)
-	
-	def get_clear_others(self) -> bool:
-		"""Return whether to clear other caches."""
-		return self.clear_others_checkbox.isChecked()
 
 
 # ==============================================================================
@@ -1434,10 +1440,10 @@ class MainWindow(QMainWindow):
 			self,
 			auto_batch_size,
 			current_config=self.embedding_config,
-		)
+			initial_force=force)
 		if dialog.exec() != QDialog.Accepted:
 			return
-		
+
 		# Create progress dialog
 		progress = QProgressDialog("Generating embeddings...", "Cancel", 0, len(frames), self)
 		progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -1446,21 +1452,15 @@ class MainWindow(QMainWindow):
 		progress.setValue(0)
 		# TODO: Start with "Initializing..." as torch and model loads, then switch to "Generating embeddings..." with frame count
 
-		embedding_config = dialog.get_config()
-		batch_size = dialog.batch_size_spin.value()
-		clear_others = dialog.get_clear_others()
-
 		# Create worker thread
-		cache_dir = self.input_dir / '.embedding_cache'
 		self.embedding_worker = EmbeddingGenerationWorker(
 			frames=frames,
-			embedding_config=embedding_config,
-			batch_size=batch_size,
-			cache_dir=cache_dir,
-			force=force,
-			clear_others=clear_others,
-		)
-		
+			embedding_config=dialog.get_config(),
+			batch_size=dialog.batch_size_spin.value(),
+			cache_dir=(self.input_dir / '.embedding_cache'),
+			force=dialog.force_checkbox.isChecked(),
+			clear_others=dialog.clear_others_checkbox.isChecked())
+
 		# Connect signals
 		self.embedding_worker.progress.connect(progress.setValue)
 		self.embedding_worker.finished.connect(lambda emb, _: self._on_embeddings_finished(frames, emb, progress))
@@ -1694,7 +1694,7 @@ class MainWindow(QMainWindow):
 		edit_menu = menubar.addMenu("&Edit")
 		
 		generate_embeddings_action = QAction("&Embeddings...", self)
-		generate_embeddings_action.triggered.connect(lambda: self._generate_embeddings(force=True))
+		generate_embeddings_action.triggered.connect(lambda: self._generate_embeddings())
 		self.generate_embeddings_action = generate_embeddings_action
 		edit_menu.addAction(generate_embeddings_action)
 
