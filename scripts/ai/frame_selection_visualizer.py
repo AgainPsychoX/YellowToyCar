@@ -1235,7 +1235,12 @@ class MainWindow(QMainWindow):
 		self.current_processing_selection: Set[int] = set()
 		self.previous_processing_selection: Set[int] = set()
 		self.selected_for_preview_index: Optional[int] = None
-		self.current_params = SelectionParams()
+		self.current_params = SelectionParams(
+			concentration_percentile=settings.value("selection/concentration_percentile", 90.0, float),
+			total_change_percentile=settings.value("selection/total_change_percentile", 60.0, float),
+			entropy_percentile=settings.value("selection/entropy_percentile", 40.0, float),
+			temporal_window=settings.value("selection/temporal_window", 5, int),
+			min_spacing=settings.value("selection/min_spacing", 5, int))
 		self.previous_params = SelectionParams()
 		
 		# Annotation data
@@ -1265,6 +1270,7 @@ class MainWindow(QMainWindow):
 		self._init_shortcuts()
 		self.param_panel.connect_value_changes(self._on_params_changed, self._on_slider_released)
 		self.param_panel.auto_apply_checkbox.stateChanged.connect(self._on_auto_apply_toggled)
+		self.param_panel.set_params(self.current_params)
 		
 		# Load data after UI is ready if input_dir is provided
 		if self.input_dir is not None:
@@ -1582,6 +1588,13 @@ class MainWindow(QMainWindow):
 			len(removed))
 		
 		self.param_panel.update_previous_display(self.previous_params)
+		
+		# Save current parameters to settings
+		settings.setValue("selection/concentration_percentile", self.current_params.concentration_percentile)
+		settings.setValue("selection/total_change_percentile", self.current_params.total_change_percentile)
+		settings.setValue("selection/entropy_percentile", self.current_params.entropy_percentile)
+		settings.setValue("selection/temporal_window", self.current_params.temporal_window)
+		settings.setValue("selection/min_spacing", self.current_params.min_spacing)
 		
 		# Enable save action once data is loaded
 		self.save_action.setEnabled(len(self.current_processing_selection) > 0)
