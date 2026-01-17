@@ -37,6 +37,7 @@ from frame_selection_core import (
 	find_existing_cache_in_dir,
 	estimate_optimal_batch_size,
 	format_cache_info,
+	clear_other_caches,
 	DEFAULT_MODEL,
 	TransformConfig,
 	EmbeddingConfig,
@@ -408,9 +409,7 @@ class EmbeddingGenerationWorker(QThread):
 	def run(self):
 		"""Execute embedding generation in background."""
 		try:
-			from frame_selection_core import (
-				load_or_compute_embeddings
-			)
+			from frame_selection_core import load_or_compute_embeddings
 			
 			config = self.embedding_config
 			
@@ -1345,16 +1344,22 @@ class MainWindow(QMainWindow):
 		cache_dir = self.input_dir / '.embedding_cache'
 		cache_list = find_existing_cache_in_dir(cache_dir)
 		
+		cache_selection_cancelled = False
 		if cache_list:
 			# Multiple or single cache found
 			selected_meta: Optional[EmbeddingMeta] = None
+			should_clear_others = False
 			
 			if len(cache_list) == 1:
 				# Single cache, use it directly
 				selected_meta = cache_list[0]
 			else:
 				# Multiple caches - show selection dialog
-				selected_meta = self._show_cache_selection_dialog(cache_list)
+				result = self._show_cache_selection_dialog(cache_list)
+				if result is None:
+					cache_selection_cancelled = True
+				else:
+					selected_meta, should_clear_others = result
 			
 			if selected_meta is not None:
 				# Try to load the embeddings from selected cache
@@ -1362,6 +1367,11 @@ class MainWindow(QMainWindow):
 				if embeddings is not None:
 					# Successfully loaded from cache
 					self.embedding_config = selected_meta.config
+					# Clean up other caches if requested
+					if should_clear_others and len(cache_list) > 1:
+						cache_key = selected_meta.cache_key()
+						if cache_key is not None:
+							clear_other_caches(cache_dir, cache_key)
 					self._load_embeddings_succeeded(frames, embeddings)
 					return
 				else:
@@ -1377,21 +1387,27 @@ class MainWindow(QMainWindow):
 						self._generate_embeddings(force=True)
 					return
 		
-		# No valid cache found
-		reply = QMessageBox.question(
-			self, "Embeddings not found",
-			f"No embeddings cache found in {self.input_dir}\n\n"
-			f"Generate embeddings now? ({len(frames)} frames)",
-			QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-		)
+		if cache_list and cache_selection_cancelled:
+			reply = QMessageBox.question(
+				self, "Embeddings not loaded",
+				"Cache selection was cancelled.\n\n"
+				"Generate embeddings now?",
+				QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+		else:
+			# No valid cache found
+			reply = QMessageBox.question(
+				self, "Embeddings not found",
+				f"No embeddings cache found in {self.input_dir}\n\n"
+				f"Generate embeddings now? ({len(frames)} frames)",
+				QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
 		
 		if reply == QMessageBox.StandardButton.Yes:
-			self._generate_embeddings(force=False)
+			self._generate_embeddings(force=True)
 	
-	def _show_cache_selection_dialog(self, cache_list: List[EmbeddingMeta]) -> Optional[EmbeddingMeta]:
-		"""Show dialog to select from multiple caches. Return selected EmbeddingMeta or None if cancelled."""
+	def _show_cache_selection_dialog(self, cache_list: List[EmbeddingMeta]):
+		"""Show dialog to select from multiple caches. Return (EmbeddingMeta, should_clear_others) or None if cancelled."""
 		dialog = QDialog(self)
-		dialog.setWindowTitle("Select Cache")
+		dialog.setWindowTitle("Select cache")
 		dialog.setMinimumWidth(500)
 		
 		layout = QVBoxLayout(dialog)
@@ -1404,6 +1420,13 @@ class MainWindow(QMainWindow):
 		
 		layout.addWidget(combo)
 		
+		# Add checkbox for clearing other caches
+		clear_others_checkbox = QCheckBox("Clear other caches")
+		clear_others_checkbox.setToolTip("Remove other cache files to save disk space")
+		clear_others_default = settings.value("embedding/clear_others", True, bool)
+		clear_others_checkbox.setChecked(clear_others_default)
+		layout.addWidget(clear_others_checkbox)
+		
 		button_box = QDialogButtonBox(
 			QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
 		button_box.accepted.connect(dialog.accept)
@@ -1411,7 +1434,7 @@ class MainWindow(QMainWindow):
 		layout.addWidget(button_box)
 		
 		if dialog.exec() == QDialog.Accepted:
-			return combo.currentData()
+			return (combo.currentData(), clear_others_checkbox.isChecked())
 		return None
 	
 	def _load_embeddings_succeeded(self, frames: List[Path], embeddings):
