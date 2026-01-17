@@ -142,10 +142,10 @@ class Alignment(Enum):
 @dataclass
 class TransformConfig:
 	"""Configuration for image preprocessing transform."""
-	mode: TransformMode = TransformMode.CROP
+	mode: TransformMode = TransformMode.PAD
 	alignment: Alignment = Alignment.CENTER
-	# Pad fill: use ImageNet mean by default for better compatibility
-	pad_fill: Tuple[float, float, float] = (0.485, 0.456, 0.406)
+	# Fill color for padding: use ImageNet mean by default for better compatibility
+	fill: Tuple[float, float, float] = (0.485, 0.456, 0.406)
 
 	@classmethod
 	def from_strings(cls, mode: str, alignment: str = 'center') -> 'TransformConfig':
@@ -154,18 +154,120 @@ class TransformConfig:
 			mode=TransformMode(mode.lower()),
 			alignment=Alignment(alignment.lower()),
 		)
-
-	def cache_key_part(self) -> str:
-		"""Return a string representation for cache key computation."""
-		return f"{self.mode.value}:{self.alignment.value}"
+	
+	def to_dict(self) -> dict:
+		return {
+			'mode': self.mode.value,
+			'alignment': self.alignment.value,
+			'fill': list(self.fill),
+		}
+	
+	@classmethod
+	def from_dict(cls, data: dict) -> 'TransformConfig':
+		return cls(
+			mode=TransformMode(data['mode']),
+			alignment=Alignment(data['alignment']),
+			fill=tuple(data['fill']),
+		)
 
 
 # Constants
 SUPPORTED_EXTENSIONS = ('.jpg', '.jpeg', '.png')
 EPSILON = 1e-8
-DEFAULT_MODEL = 'vit_small_patch16_224.dino'
+DEFAULT_MODEL = 'vit_base_patch16_224.dino'
 IMAGE_SIZE = 224
 DEFAULT_TRANSFORM_CONFIG = TransformConfig()
+
+
+@dataclass
+class EmbeddingConfig:
+	"""Bundled settings for embedding computation and caching."""
+	model: str = DEFAULT_MODEL
+	model_input_size: int = IMAGE_SIZE
+	normalize: bool = True
+	transform: TransformConfig = field(default_factory=TransformConfig)
+
+	def to_dict(self) -> dict:
+		return {
+			'model': self.model,
+			'model_input_size': self.model_input_size,
+			'normalize': self.normalize,
+			'transform': self.transform.to_dict(),
+		}
+	
+	@classmethod
+	def from_dict(cls, data: dict) -> 'EmbeddingConfig':
+		return cls(
+			model=data['model'],
+			model_input_size=data.get('model_input_size', IMAGE_SIZE),
+			normalize=data['normalize'],
+			transform=TransformConfig.from_dict(data['transform']),
+		)
+	
+	def __eq__(self, other) -> bool:
+		"""Compare two EmbeddingConfig instances for equality."""
+		if not isinstance(other, EmbeddingConfig):
+			return False
+		return (
+			self.model == other.model and
+			self.model_input_size == other.model_input_size and
+			self.normalize == other.normalize and
+			self.transform == other.transform
+		)
+
+
+@dataclass
+class EmbeddingMeta:
+	"""Metadata for cached embeddings."""
+	config: EmbeddingConfig
+	frame_count: int
+	embedding_shape: Tuple[int, int, int]
+	version: int
+
+	# Non-serializable fields (set after loading from disk)
+	path: Optional[Path] = field(default=None, init=False, repr=False)
+
+	def cache_key(self) -> Optional[str]:
+		"""
+		Return cache key string derived from the meta file path (if set).
+
+		Extracts the key from a filename like 'embeddings_<key>.json'. Returns None
+		if `self.path` is not set.
+		"""
+		if self.path is None:
+			return None
+		return self.path.stem.replace('embeddings_', '')
+	
+	def to_dict(self) -> dict:
+		"""Serialize to dictionary for JSON storage."""
+		return {
+			'version': self.version,
+			'config': self.config.to_dict(),
+			'frame_count': self.frame_count,
+			'embedding_shape': list(self.embedding_shape),
+		}
+	
+	@classmethod
+	def from_dict(cls, data: dict) -> 'EmbeddingMeta':
+		"""Deserialize from dictionary."""
+		return cls(
+			config=EmbeddingConfig.from_dict(data['config']),
+			frame_count=data['frame_count'],
+			embedding_shape=tuple(data['embedding_shape']),
+			version=data['version'],
+		)
+	
+	def __eq__(self, other) -> bool:
+		"""Compare metadata for equality."""
+		if not isinstance(other, EmbeddingMeta):
+			return False
+		return (
+			self.config.model == other.config.model and
+			self.config.model_input_size == other.config.model_input_size and
+			self.config.normalize == other.config.normalize and
+			self.config.transform == other.config.transform and
+			self.version == other.version
+		)
 
 
 @dataclass
@@ -184,20 +286,6 @@ class SelectionParams:
 			entropy_percentile=self.entropy_percentile,
 			temporal_window=self.temporal_window,
 			min_spacing=self.min_spacing)
-
-
-def parse_frame_number(filename: str) -> Optional[int]:
-	"""
-	Extract frame number from filename.
-	
-	Expected format: {frame_number}_{timestamp}.jpg
-	Example: 0042_20231215_143045.jpg → 42
-	"""
-	try:
-		prefix = filename.split('_', 1)[0]
-		return int(prefix)
-	except (ValueError, IndexError):
-		return None
 
 
 def collect_frames(input_dir: Path) -> List[Path]:
@@ -223,28 +311,33 @@ def collect_frames(input_dir: Path) -> List[Path]:
 	frames.sort(key=lambda p: p.name)
 	return frames
 
-
-def compute_cache_key(
-	model_name: str,
-	frame_paths: List[Path],
-	normalize: bool,
-	transform_config: TransformConfig = None
-) -> str:
-	"""Compute a hash-based cache key for embeddings (uses filenames only, not full paths)."""
-	if transform_config is None:
-		transform_config = DEFAULT_TRANSFORM_CONFIG
-
-	hasher = hashlib.sha256()
-	hasher.update(model_name.encode('utf-8'))
+def compute_cache_key(config: EmbeddingConfig, frames: List[Path]) -> str:
+	"""
+	Compute a deterministic cache hash key for embeddings given an EmbeddingConfig 
+	and list of frames paths (uses filenames only).
+	"""
+	# Single SHA1 hasher: serialize config fields and frame filenames deterministically
+	hasher = hashlib.sha1(usedforsecurity=False)
+	# Config fields
+	hasher.update(config.model.encode('utf-8'))
 	hasher.update(b'\x00')
-	hasher.update(str(normalize).encode('utf-8'))
+	hasher.update(str(config.model_input_size).encode('utf-8'))
 	hasher.update(b'\x00')
-	hasher.update(transform_config.cache_key_part().encode('utf-8'))
+	hasher.update(str(bool(config.normalize)).encode('utf-8'))
 	hasher.update(b'\x00')
-	for path in sorted(frame_paths, key=lambda p: p.name):
+	# Transform fields
+	transform = config.transform
+	transform_repr = (
+		f"{transform.mode.value}|{transform.alignment.value}|"
+		f"{','.join(str(c) for c in transform.fill)}"
+	)
+	hasher.update(transform_repr.encode('utf-8'))
+	# Append delimiter and frame filenames (sorted)
+	hasher.update(b'\x00')
+	for path in sorted(frames, key=lambda p: p.name):
 		hasher.update(path.name.encode('utf-8'))
 		hasher.update(b'\x00')
-	return hasher.hexdigest()[:16]
+	return hasher.hexdigest()
 
 
 def get_cache_path(cache_dir: Path, cache_key: str) -> Tuple[Path, Path]:
@@ -254,43 +347,32 @@ def get_cache_path(cache_dir: Path, cache_key: str) -> Tuple[Path, Path]:
 	return tensor_path, meta_path
 
 
-def find_existing_cache_in_dir(cache_dir: Path) -> Optional[Tuple[dict, str]]:
-	"""
-	Find and load the first valid cache in directory.
-	
-	Returns:
-		Tuple of (metadata_dict, cache_key_str) or None if no valid cache found.
-	"""
+def find_existing_cache_in_dir(cache_dir: Path) -> List[EmbeddingMeta]:
+	"""Find all valid caches in directory. Empty list if none found."""
 	if not cache_dir.exists():
-		return None
+		return []
 	
+	results = []
 	try:
 		for meta_path in sorted(cache_dir.glob("embeddings_*.json")):
-			try:
-				with open(meta_path, 'r') as f:
-					meta = json.load(f)
-				
-				if meta.get('cache_version') == 1:
-					# Extract cache_key from filename (embeddings_XXXX.json -> XXXX)
-					cache_key = meta_path.stem.replace('embeddings_', '')
-					return meta, cache_key
-			except Exception:
-				continue
+			meta = load_cached_embeddings_meta(meta_path)
+			if meta is not None:
+				results.append(meta)
 	except Exception:
 		pass
 	
-	return None
+	return results
 
 
-def format_cache_info(meta: dict) -> str:
+def format_cache_info(meta: EmbeddingMeta) -> str:
 	"""Format cache metadata as human-readable string."""
-	model = meta.get('model', 'unknown')
-	normalize = meta.get('normalize', False)
-	frame_count = meta.get('frame_count', 0)
-	shape = meta.get('embedding_shape', [])
+	model = meta.config.model
+	normalize = meta.config.normalize
+	frame_count = meta.frame_count
+	shape = meta.embedding_shape
 	
 	norm_str = "normalized" if normalize else "not normalized"
-	shape_str = f"{shape[0]}x{shape[1]}x{shape[2]}" if len(shape) >= 3 else "unknown"
+	shape_str = f"{shape[0]}x{shape[1]}x{shape[2]}"
 	
 	return f"{model} ({frame_count} frames, {norm_str}, shape: {shape_str})"
 
@@ -314,65 +396,71 @@ def clear_other_caches(cache_dir: Path, keep_key: str) -> None:
 		print(f"Warning: Failed to clear old caches: {exc}")
 
 
-def load_cached_embeddings(
-	cache_dir: Path,
-	cache_key: str,
-	model_name: str,
-	normalize: bool
-) -> Optional["torch.Tensor"]:
-	"""Load embeddings from cache if valid."""
-	tensor_path, meta_path = get_cache_path(cache_dir, cache_key)
-	
-	if not tensor_path.exists() or not meta_path.exists():
+def load_cached_embeddings_meta(cache_path: Path) -> Optional[EmbeddingMeta]:
+	"""Load embedding metadata from cache JSON file."""
+	if not cache_path.exists():
 		return None
 	
 	try:
-		with open(meta_path, 'r') as f:
-			meta = json.load(f)
-		
-		if meta.get('model') != model_name:
-			return None
-		if meta.get('normalize') != normalize:
-			return None
-		if meta.get('cache_version') != 1:
+		with open(cache_path, 'r') as f:
+			data = json.load(f)
+
+		if data.get('version') != 1:
 			return None
 		
+		meta = EmbeddingMeta.from_dict(data)
+		meta.path = cache_path
+		return meta
+		
+	except Exception:
+		return None
+
+
+def load_cached_embeddings_data(cache_path: Path) -> Optional["torch.Tensor"]:
+	"""Load embeddings tensor from cache PT file."""
+	# Convert .json path to .pt path
+	pt_path = cache_path.with_suffix('.pt')
+	
+	if not pt_path.exists():
+		return None
+	
+	try:
 		torch = _get_torch()
-		embeddings = torch.load(tensor_path, map_location='cpu', weights_only=True)
+		embeddings = torch.load(pt_path, map_location='cpu', weights_only=True)
 		return embeddings
-		
 	except Exception:
 		return None
 
 
 def save_embeddings_cache(
 	cache_dir: Path,
-	cache_key: str,
+	frames: List[Path],
+	config: EmbeddingConfig,
 	embeddings: "torch.Tensor",
-	model_name: str,
-	normalize: bool,
-	frame_count: int
+	clear_others: bool = True,
 ) -> None:
 	"""Persist embeddings tensor and metadata to cache directory."""
 	cache_dir.mkdir(parents=True, exist_ok=True)
+	cache_key = compute_cache_key(config, frames)
 	tensor_path, meta_path = get_cache_path(cache_dir, cache_key)
 
 	try:
 		# Clear other cache files to save space (embeddings can be huge)
-		clear_other_caches(cache_dir, cache_key)
+		if clear_others:
+			clear_other_caches(cache_dir, cache_key)
 		
 		torch = _get_torch()
 		torch.save(embeddings, tensor_path)
 
-		meta = {
-			'cache_version': 1,
-			'model': model_name,
-			'normalize': normalize,
-			'frame_count': frame_count,
-			'embedding_shape': list(embeddings.shape),
-		}
+		meta = EmbeddingMeta(
+			config=config,
+			frame_count=len(frames),
+			embedding_shape=tuple(embeddings.shape),
+			version=1,
+		)
+		
 		with open(meta_path, 'w') as f:
-			json.dump(meta, f, indent=2)
+			json.dump(meta.to_dict(), f, indent='\t')
 		print(f"Cached embeddings to: {tensor_path}")
 
 	except Exception as exc:
@@ -689,7 +777,7 @@ def get_transform(
 		# Resize so largest dim == image_size, then pad the rest
 		return transforms.Compose([
 			_ResizePreservingAspect(image_size, fit_inside=True),
-			_AlignedPad(image_size, config.alignment, config.pad_fill),
+			_AlignedPad(image_size, config.alignment, config.fill),
 			transforms.ToTensor(),
 			transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 		])
@@ -733,49 +821,48 @@ def extract_patch_embeddings(
 
 
 def load_or_compute_embeddings(
+	cache_dir: Path,
 	frames: List[Path],
-	model_name: str,
-	model_input_size: int = IMAGE_SIZE,
-	cache_dir: Path = None,
-	normalize: bool = True,
+	config: EmbeddingConfig,
 	force: bool = False,
 	batch_size: int = 8,
-	cache_key: str = None,
 	progress: Callable[[int, int], None] | None = None,
-	transform_config: TransformConfig = None,
-) -> Tuple["torch.Tensor", str, bool]:
+	clear_others: bool = True,
+) -> Tuple["torch.Tensor", bool]:
 	"""
 	Load embeddings from cache or compute them if missing.
 
 	Args:
-		frames: List of Path objects for frames to process.
-		model_name: Name of the ViT model to use.
-		model_input_size: Target square size for model input (typically 224).
 		cache_dir: Directory for caching embeddings.
-		normalize: Whether to L2-normalize patch embeddings.
+		frames: List of Path objects for frames to process.
+		config: Embedding configuration (model, normalize, transform, input size).
 		force: Force recompute even if cache exists.
 		batch_size: Number of images to process at once.
-		cache_key: Pre-computed cache key (optional).
 		progress: Callback for progress updates (done, total).
-		transform_config: Image transform configuration (crop/pad/scale with alignment).
+		clear_others: If True, remove other cache files after saving. Default True.
 
-	Returns: Tuple of (embeddings, cache_key, from_cache)
+	Returns: Tuple of (embeddings, from_cache)
 	"""
-	if transform_config is None:
-		transform_config = DEFAULT_TRANSFORM_CONFIG
-
-	cache_key = cache_key or compute_cache_key(model_name, frames, normalize, transform_config)
-
 	if not force:
-		embeddings = load_cached_embeddings(cache_dir, cache_key, model_name, normalize)
-		if embeddings is not None:
-			return embeddings, cache_key, True
+		# Try to load from cache
+		cache_key = compute_cache_key(config, frames)
+		tensor_path, meta_path = get_cache_path(cache_dir, cache_key)
+		
+		if meta_path.exists():
+			meta = load_cached_embeddings_meta(meta_path)
+			if meta is not None:
+				# Verify config matches (sanity, cache key already should be enough)
+				if meta.config == config:
+					# Load embeddings data
+					embeddings = load_cached_embeddings_data(tensor_path)
+					if embeddings is not None:
+						return embeddings, True
 
 	torch = _get_torch()
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-	model = load_model(model_name, device)
-	transform = get_transform(model_input_size, transform_config)
+	model = load_model(config.model, device)
+	transform = get_transform(config.model_input_size, config.transform)
 	Image = _get_pil()
 	all_embeddings_list = []
 
@@ -788,16 +875,16 @@ def load_or_compute_embeddings(
 				batch_images.append(img_tensor)
 
 		batch_tensor = torch.stack(batch_images).to(device)
-		embeddings = extract_patch_embeddings(model, batch_tensor, normalize=normalize)
+		embeddings = extract_patch_embeddings(model, batch_tensor, normalize=config.normalize)
 		all_embeddings_list.append(embeddings.cpu())
 
 		if progress is not None:
 			progress(min(start + batch_size, len(frames)), len(frames))
 
 	all_embeddings = torch.cat(all_embeddings_list, dim=0)
-	save_embeddings_cache(cache_dir, cache_key, all_embeddings, model_name, normalize, len(frames))
+	save_embeddings_cache(cache_dir, frames, config, all_embeddings, clear_others=clear_others)
 
-	return all_embeddings, cache_key, False
+	return all_embeddings, False
 
 
 class FrameSelectionData:

@@ -2,8 +2,8 @@
 """
 Frame Selection Visualizer
 
-Interactive GUI for tuning frame selection parameters.
-Requires embeddings cache to be pre-computed by select_frames_vit.py
+Interactive GUI for tuning frame selection parameters using ViT embeddings,
+with visualization of selected frames and Label Studio annotations.
 """
 
 import json
@@ -32,12 +32,15 @@ from frame_selection_core import (
 	SelectionParams,
 	FrameSelectionData,
 	collect_frames,
-	load_cached_embeddings,
+	load_cached_embeddings_data,
 	create_frame_selection_data,
 	find_existing_cache_in_dir,
 	estimate_optimal_batch_size,
+	format_cache_info,
 	DEFAULT_MODEL,
 	TransformConfig,
+	EmbeddingConfig,
+	EmbeddingMeta,
 )
 
 
@@ -221,11 +224,17 @@ class AnnotationLoadDialog(QDialog):
 class EmbeddingGenerationDialog(QDialog):
 	"""Dialog for configuring embedding generation parameters."""
 	
-	def __init__(self, parent=None, auto_batch_size: int = 8):
+	def __init__(
+		self,
+		parent=None,
+		auto_batch_size: int = 8,
+		current_config: Optional[EmbeddingConfig] = None,
+	):
 		super().__init__(parent)
 		self.setWindowTitle("Generate Embeddings")
 		self.setMinimumWidth(400)
 		self.auto_batch_size = auto_batch_size
+		self.initial_config = current_config
 		
 		layout = QVBoxLayout(self)
 		form_layout = QFormLayout()
@@ -249,14 +258,12 @@ class EmbeddingGenerationDialog(QDialog):
 		
 		# Normalize checkbox
 		self.normalize_checkbox = QCheckBox("L2 Normalize Embeddings")
-		self.normalize_checkbox.setChecked(True)
 		self.normalize_checkbox.setToolTip("Normalize patch embeddings to unit length")
 		form_layout.addRow(self.normalize_checkbox)
 		
 		# Transform mode
 		self.transform_combo = QComboBox()
 		self.transform_combo.addItems(['crop', 'pad', 'scale'])
-		self.transform_combo.setCurrentText('crop')
 		self.transform_combo.setToolTip(
 			"crop: Resize & crop (loses edges) | pad: Resize & pad (preserves data) | scale: Stretch to fit")
 		form_layout.addRow("Transform:", self.transform_combo)
@@ -264,14 +271,12 @@ class EmbeddingGenerationDialog(QDialog):
 		# Alignment
 		self.align_combo = QComboBox()
 		self.align_combo.addItems(['center', 'top', 'bottom', 'left', 'right'])
-		self.align_combo.setCurrentText('center')
 		self.align_combo.setToolTip("Alignment for crop/pad along adjusted axis")
 		form_layout.addRow("Alignment:", self.align_combo)
 		
 		# Batch size
 		self.batch_size_spin = QSpinBox()
 		self.batch_size_spin.setRange(1, 64)
-		self.batch_size_spin.setValue(auto_batch_size)
 		self.batch_size_spin.setToolTip("Number of images to process at once")
 		
 		batch_row_layout = QHBoxLayout()
@@ -279,6 +284,11 @@ class EmbeddingGenerationDialog(QDialog):
 		batch_row_layout.addWidget(QLabel(f"(auto-detected: {auto_batch_size})"))
 		batch_row_layout.addStretch()
 		form_layout.addRow("Batch Size:", batch_row_layout)
+		
+		# Clear other caches checkbox
+		self.clear_others_checkbox = QCheckBox("Clear other caches")
+		self.clear_others_checkbox.setToolTip("Remove other cache files to save disk space")
+		form_layout.addRow(self.clear_others_checkbox)
 		
 		layout.addLayout(form_layout)
 		
@@ -293,58 +303,60 @@ class EmbeddingGenerationDialog(QDialog):
 		self._load_preferences()
 	
 	def _load_preferences(self):
-		"""Load previously selected settings from QSettings."""
-		model = settings.value("embedding/model", DEFAULT_MODEL, str)
-		normalize = settings.value("embedding/normalize", True, bool)
-		transform = settings.value("embedding/transform", "crop", str)
-		align = settings.value("embedding/alignment", "center", str)
-		batch_size = settings.value("embedding/batch_size", self.auto_batch_size, int)
-		
-		# Set values
-		if model == "Custom..." or model not in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
+		"""Load previously selected settings from QSettings and current config."""
+		batch_size_pref = settings.value("embedding/batch_size", self.auto_batch_size, int)
+		clear_others_pref = settings.value("embedding/clear_others", True, bool)
+
+		if self.initial_config.model not in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
 			self.model_combo.setCurrentText("Custom...")
-			self.custom_model_input.setText(model)
+			self.custom_model_input.setText(self.initial_config.model)
 		else:
-			self.model_combo.setCurrentText(model)
+			self.model_combo.setCurrentText(self.initial_config.model)
 		
-		self.normalize_checkbox.setChecked(normalize)
-		self.transform_combo.setCurrentText(transform)
-		self.align_combo.setCurrentText(align)
-		self.batch_size_spin.setValue(batch_size)
+		self.normalize_checkbox.setChecked(self.initial_config.normalize)
+		self.transform_combo.setCurrentText(self.initial_config.transform.mode.value)
+		self.align_combo.setCurrentText(self.initial_config.transform.alignment.value)
+		self.batch_size_spin.setValue(batch_size_pref)
+		self.clear_others_checkbox.setChecked(clear_others_pref)
 	
 	def _save_preferences(self):
 		"""Save current settings to QSettings."""
-		model, normalize, transform, align, batch_size = self.get_values()
-		
-		settings.setValue("embedding/model", model)
-		settings.setValue("embedding/normalize", normalize)
-		settings.setValue("embedding/transform", transform)
-		settings.setValue("embedding/alignment", align)
-		settings.setValue("embedding/batch_size", batch_size)
+		config = self.get_config()
+		settings.setValue("embedding/model", config.model)
+		settings.setValue("embedding/normalize", config.normalize)
+		settings.setValue("embedding/transform", config.transform.mode.value)
+		settings.setValue("embedding/alignment", config.transform.alignment.value)
+		settings.setValue("embedding/batch_size", self.batch_size_spin.value())
+		settings.setValue("embedding/clear_others", self.clear_others_checkbox.isChecked())
 	
 	def accept(self):
 		"""Override accept to save preferences."""
 		self._save_preferences()
 		super().accept()
-	
+
 	def _on_model_changed(self, text: str):
 		"""Show custom model input when 'Custom...' is selected."""
 		self.custom_model_input.setVisible(text == "Custom...")
-	
-	def get_values(self) -> Tuple[str, bool, str, str, int]:
-		"""Return (model_name, normalize, transform_mode, alignment, batch_size)."""
+
+	def get_config(self) -> EmbeddingConfig:
+		"""Return selected embedding configuration as a dataclass."""
 		if self.model_combo.currentText() == "Custom...":
 			model = self.custom_model_input.text().strip()
 		else:
 			model = self.model_combo.currentText()
-		
-		return (
-			model,
-			self.normalize_checkbox.isChecked(),
-			self.transform_combo.currentText(),
-			self.align_combo.currentText(),
-			self.batch_size_spin.value()
+
+		return EmbeddingConfig(
+			model=model,
+			normalize=self.normalize_checkbox.isChecked(),
+			transform=TransformConfig.from_strings(
+				self.transform_combo.currentText(),
+				self.align_combo.currentText(),
+			),
 		)
+	
+	def get_clear_others(self) -> bool:
+		"""Return whether to clear other caches."""
+		return self.clear_others_checkbox.isChecked()
 
 
 # ==============================================================================
@@ -355,29 +367,25 @@ class EmbeddingGenerationWorker(QThread):
 	"""Worker thread for computing embeddings in background."""
 	
 	progress = Signal(int, int)  # (done, total)
-	finished = Signal(object, str)  # (embeddings_tensor, cache_key)
+	finished = Signal(object, bool)  # (embeddings_tensor, from_cache)
 	error = Signal(str)  # error_message
-	
+
 	def __init__(
 		self,
 		frames: List[Path],
-		model_name: str,
-		normalize: bool,
-		transform_mode: str,
-		alignment: str,
+		embedding_config: EmbeddingConfig,
 		batch_size: int,
 		cache_dir: Path,
-		force: bool = False
+		force: bool = False,
+		clear_others: bool = True,
 	):
 		super().__init__()
 		self.frames = frames
-		self.model_name = model_name
-		self.normalize = normalize
-		self.transform_mode = transform_mode
-		self.alignment = alignment
+		self.embedding_config = embedding_config
 		self.batch_size = batch_size
 		self.cache_dir = cache_dir
 		self.force = force
+		self.clear_others = clear_others
 		self._is_cancelled = False
 		self._mutex = __import__('threading').RLock()
 	
@@ -395,38 +403,30 @@ class EmbeddingGenerationWorker(QThread):
 		"""Execute embedding generation in background."""
 		try:
 			from frame_selection_core import (
-				TransformConfig,
-				compute_cache_key,
 				load_or_compute_embeddings
 			)
 			
-			# Create transform config
-			transform_config = TransformConfig.from_strings(self.transform_mode, self.alignment)
-			
-			# Compute cache key
-			cache_key = compute_cache_key(
-				self.model_name, self.frames, self.normalize, transform_config)
+			config = self.embedding_config
 			
 			# Progress callback
 			def progress_callback(done: int, total: int):
+				# TODO: make sure cancellation works; maybe raise exception to stop?
 				if not self.is_cancelled():
 					self.progress.emit(done, total)
 			
 			# Load or compute embeddings
-			embeddings, final_cache_key, from_cache = load_or_compute_embeddings(
-				frames=self.frames,
-				model_name=self.model_name,
+			embeddings, from_cache = load_or_compute_embeddings(
 				cache_dir=self.cache_dir,
-				normalize=self.normalize,
+				frames=self.frames,
+				config=config,
 				force=self.force,
 				batch_size=self.batch_size,
-				cache_key=cache_key,
 				progress=progress_callback,
-				transform_config=transform_config
+				clear_others=self.clear_others,
 			)
 			
 			if not self.is_cancelled():
-				self.finished.emit(embeddings, final_cache_key)
+				self.finished.emit(embeddings, from_cache)
 			
 		except Exception as exc:
 			if not self.is_cancelled():
@@ -935,11 +935,6 @@ class ParameterPanel(QWidget):
 		stats_layout.addWidget(self.diff_label)
 		layout.addLayout(stats_layout)
 
-		# Cache info display
-		self.cache_info_label = QLabel("Cache: (not loaded)")
-		self.cache_info_label.setStyleSheet("font-size: 11px; color: #999;")
-		layout.addWidget(self.cache_info_label)
-
 		# Auto-apply toggle
 		self.auto_apply_checkbox = QCheckBox("Auto-apply on change")
 		layout.addWidget(self.auto_apply_checkbox)
@@ -1059,12 +1054,6 @@ class ParameterPanel(QWidget):
 			self.diff_label.setText(" ".join(diff_parts))
 		else:
 			self.diff_label.setText("No changes")
-	
-	def update_cache_info(self, model: str, normalize: bool, transform_config: TransformConfig):
-		"""Update cache info display."""
-		norm_str = "norm" if normalize else "no-norm"
-		transform_str = f"{transform_config.mode.value}+{transform_config.alignment.value}"
-		self.cache_info_label.setText(f"Cache: {model} | {norm_str} | {transform_str}")
 	
 	def _reset_to_previous(self):
 		"""Reset sliders to previous values."""
@@ -1253,9 +1242,14 @@ class MainWindow(QMainWindow):
 		self.manually_unselected: Set[int] = set()
 		
 		# Embedding configuration
-		self.embedding_model: str = DEFAULT_MODEL
-		self.embedding_normalize: bool = True
-		self.embedding_transform_config: TransformConfig = TransformConfig()
+		self.embedding_config: EmbeddingConfig = EmbeddingConfig(
+			model=settings.value("embedding/model", DEFAULT_MODEL, str),
+			normalize=settings.value("embedding/normalize", True, bool),
+			transform=TransformConfig.from_strings(
+				settings.value("embedding/transform", "pad", str),
+				settings.value("embedding/alignment", "center", str),
+			),
+		)
 		
 		# Worker thread
 		self.embedding_worker: Optional[EmbeddingGenerationWorker] = None
@@ -1341,44 +1335,43 @@ class MainWindow(QMainWindow):
 			QMessageBox.critical(self, "Error", f"Need at least 2 frames in {self.input_dir}\n\nTry opening a different directory.")
 			return
 		
-		# Try to find existing cache
+		# Try to find existing caches
 		cache_dir = self.input_dir / '.embedding_cache'
-		cache_info = find_existing_cache_in_dir(cache_dir)
+		cache_list = find_existing_cache_in_dir(cache_dir)
 		
-		if cache_info:
-			# Load existing cache metadata to get its parameters
-			meta, cache_key = cache_info
-			cached_model = meta.get('model')
-			cached_normalize = meta.get('normalize')
-			cached_transform_str = meta.get('transform', 'crop:center')
+		if cache_list:
+			# Multiple or single cache found
+			selected_meta: Optional[EmbeddingMeta] = None
 			
-			# Try to load the embeddings
-			embeddings = load_cached_embeddings(cache_dir, cache_key, cached_model, cached_normalize)
-			
-			if embeddings is not None:
-				# Successfully loaded from cache
-				self.embedding_model = cached_model
-				self.embedding_normalize = cached_normalize
-				# Parse transform config from string
-				mode_str, align_str = cached_transform_str.split(':', 1) if ':' in cached_transform_str else (cached_transform_str, 'center')
-				self.embedding_transform_config = TransformConfig.from_strings(mode_str, align_str)
-				self._load_embeddings_succeeded(frames, embeddings)
-				return
+			if len(cache_list) == 1:
+				# Single cache, use it directly
+				selected_meta = cache_list[0]
 			else:
-				# Cache metadata exists but embeddings are broken/corrupted
-				num_frames = meta.get('frame_count', 'unknown')
-				reply = QMessageBox.critical(
-					self, "Broken cache",
-					f"Cache metadata found but embeddings are corrupted.\n"
-					f"Frames in cache: {num_frames}\n\n"
-					f"Would you like to regenerate?",
-					QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-				)
-				if reply == QMessageBox.StandardButton.Yes:
-					self._generate_embeddings(force=True)
-				return
+				# Multiple caches - show selection dialog
+				selected_meta = self._show_cache_selection_dialog(cache_list)
+			
+			if selected_meta is not None:
+				# Try to load the embeddings from selected cache
+				embeddings = load_cached_embeddings_data(selected_meta.path)
+				if embeddings is not None:
+					# Successfully loaded from cache
+					self.embedding_config = selected_meta.config
+					self._load_embeddings_succeeded(frames, embeddings)
+					return
+				else:
+					# Cache metadata exists but embeddings are broken/corrupted
+					reply = QMessageBox.critical(
+						self, "Broken cache",
+						f"Cache metadata found but embeddings are corrupted.\n"
+						f"Frames in cache: {selected_meta.frame_count}\n\n"
+						f"Would you like to regenerate?",
+						QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+					)
+					if reply == QMessageBox.StandardButton.Yes:
+						self._generate_embeddings(force=True)
+					return
 		
-		# No cache found - ask user if they want to generate
+		# No valid cache found
 		reply = QMessageBox.question(
 			self, "Embeddings not found",
 			f"No embeddings cache found in {self.input_dir}\n\n"
@@ -1389,18 +1382,38 @@ class MainWindow(QMainWindow):
 		if reply == QMessageBox.StandardButton.Yes:
 			self._generate_embeddings(force=False)
 	
+	def _show_cache_selection_dialog(self, cache_list: List[EmbeddingMeta]) -> Optional[EmbeddingMeta]:
+		"""Show dialog to select from multiple caches. Return selected EmbeddingMeta or None if cancelled."""
+		dialog = QDialog(self)
+		dialog.setWindowTitle("Select Cache")
+		dialog.setMinimumWidth(500)
+		
+		layout = QVBoxLayout(dialog)
+		layout.addWidget(QLabel("Multiple embedding caches found. Select one:"))
+		
+		combo = QComboBox()
+		for meta in cache_list:
+			info = format_cache_info(meta)
+			combo.addItem(info, userData=meta)
+		
+		layout.addWidget(combo)
+		
+		button_box = QDialogButtonBox(
+			QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+		button_box.accepted.connect(dialog.accept)
+		button_box.rejected.connect(dialog.reject)
+		layout.addWidget(button_box)
+		
+		if dialog.exec() == QDialog.Accepted:
+			return combo.currentData()
+		return None
+	
 	def _load_embeddings_succeeded(self, frames: List[Path], embeddings):
 		"""Handle successful embeddings load."""
 		self.data = create_frame_selection_data(
 			frames,
 			embeddings,
 			temporal_window=self.current_params.temporal_window)
-		
-		# Update cache info display
-		self.param_panel.update_cache_info(
-			self.embedding_model,
-			self.embedding_normalize,
-			self.embedding_transform_config)
 		
 		# Initialize UI
 		self.thumbnail_grid.set_frame_count(len(self.data))
@@ -1417,33 +1430,40 @@ class MainWindow(QMainWindow):
 		auto_batch_size = estimate_optimal_batch_size()
 		
 		# Show dialog
-		dialog = EmbeddingGenerationDialog(self, auto_batch_size)
+		dialog = EmbeddingGenerationDialog(
+			self,
+			auto_batch_size,
+			current_config=self.embedding_config,
+		)
 		if dialog.exec() != QDialog.Accepted:
 			return
-		
-		model_name, normalize, transform_mode, alignment, batch_size = dialog.get_values()
-		
-		# Create worker thread
-		cache_dir = self.input_dir / '.embedding_cache'
-		self.embedding_worker = EmbeddingGenerationWorker(
-			frames=frames,
-			model_name=model_name,
-			normalize=normalize,
-			transform_mode=transform_mode,
-			alignment=alignment,
-			batch_size=batch_size,
-			cache_dir=cache_dir,
-			force=force
-		)
 		
 		# Create progress dialog
 		progress = QProgressDialog("Generating embeddings...", "Cancel", 0, len(frames), self)
 		progress.setWindowModality(Qt.WindowModality.WindowModal)
+		progress.setWindowTitle("Embedding generation")
 		progress.setMinimumDuration(0)
+		progress.setValue(0)
+		# TODO: Start with "Initializing..." as torch and model loads, then switch to "Generating embeddings..." with frame count
+
+		embedding_config = dialog.get_config()
+		batch_size = dialog.batch_size_spin.value()
+		clear_others = dialog.get_clear_others()
+
+		# Create worker thread
+		cache_dir = self.input_dir / '.embedding_cache'
+		self.embedding_worker = EmbeddingGenerationWorker(
+			frames=frames,
+			embedding_config=embedding_config,
+			batch_size=batch_size,
+			cache_dir=cache_dir,
+			force=force,
+			clear_others=clear_others,
+		)
 		
 		# Connect signals
 		self.embedding_worker.progress.connect(progress.setValue)
-		self.embedding_worker.finished.connect(lambda emb, key: self._on_embeddings_finished(frames, emb, progress))
+		self.embedding_worker.finished.connect(lambda emb, _: self._on_embeddings_finished(frames, emb, progress))
 		self.embedding_worker.error.connect(lambda err: self._on_embeddings_error(err, progress))
 		progress.canceled.connect(self.embedding_worker.cancel)
 		
@@ -1456,12 +1476,7 @@ class MainWindow(QMainWindow):
 		
 		# Store embedding config
 		if self.embedding_worker:
-			self.embedding_model = self.embedding_worker.model_name
-			self.embedding_normalize = self.embedding_worker.normalize
-			self.embedding_transform_config = TransformConfig.from_strings(
-				self.embedding_worker.transform_mode,
-				self.embedding_worker.alignment
-			)
+			self.embedding_config = self.embedding_worker.embedding_config
 		
 		# Load the embeddings
 		self._load_embeddings_succeeded(frames, embeddings)
@@ -1678,7 +1693,7 @@ class MainWindow(QMainWindow):
 		# Edit menu with embedding generation
 		edit_menu = menubar.addMenu("&Edit")
 		
-		generate_embeddings_action = QAction("Generate &Embeddings...", self)
+		generate_embeddings_action = QAction("&Embeddings...", self)
 		generate_embeddings_action.triggered.connect(lambda: self._generate_embeddings(force=True))
 		self.generate_embeddings_action = generate_embeddings_action
 		edit_menu.addAction(generate_embeddings_action)
