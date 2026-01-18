@@ -19,16 +19,14 @@ from utils import prepare_output_dir
 from frame_selection_core import (
 	DEFAULT_MODEL,
 	EPSILON,
-	FrameSelectionData,
 	SelectionParams,
 	TransformConfig,
+	EmbeddingConfig,
 	collect_frames,
-	compute_cache_key,
-	compute_change_metrics,
-	compute_patch_changes,
 	create_frame_selection_data,
 	farthest_point_sampling,
 	load_or_compute_embeddings,
+	compute_cache_key,
 )
 
 
@@ -92,30 +90,10 @@ Examples:
 			'top/bottom for portrait, left/right for landscape. Default: center')
 	parser.add_argument('--save-metrics', action='store_true',
 		help='Write frame metrics to CSV file in output directory')
+	parser.add_argument('--no-clear-others', action='store_true',
+		help='Do not clear other cache files when saving embeddings (keep multiple caches)')
 
 	return parser.parse_args()
-
-
-def prepare_output_dir(path: str, overwrite: bool) -> None:
-	"""Ensure output dir exists and is empty; clear when overwrite is set."""
-	if not os.path.exists(path):
-		os.makedirs(path)
-		return
-
-	contents = os.listdir(path)
-	if not contents:
-		return
-
-	if not overwrite:
-		print(f"Error: output directory '{path}' is not empty. Use --overwrite to clear it.")
-		raise SystemExit(1)
-
-	try:
-		shutil.rmtree(path)
-		os.makedirs(path)
-	except Exception as e:
-		print(f"Error: failed to clear directory '{path}': {e}")
-		raise SystemExit(1)
 
 
 def main():
@@ -147,7 +125,12 @@ def main():
 	normalize = not args.no_l2_normalize
 	transform_config = TransformConfig.from_strings(args.transform, args.align)
 	cache_dir = Path(args.cache_dir) if args.cache_dir else (input_dir / '.embedding_cache')
-	cache_key = compute_cache_key(args.model, frames, normalize, transform_config)
+	embedding_config = EmbeddingConfig(
+		model=args.model,
+		normalize=normalize,
+		transform=transform_config,
+	)
+	cache_key = compute_cache_key(embedding_config, frames)
 
 	print(f"\nTransform: {transform_config.mode.value} (align: {transform_config.alignment.value})")
 	print(f"Checking embedding cache (key: {cache_key})...")
@@ -155,16 +138,14 @@ def main():
 	def _progress(done: int, total: int):
 		print(f"  Processed {done}/{total} frames", end='\r', flush=True)
 
-	embeddings, cache_key, from_cache = load_or_compute_embeddings(
-		frames=frames,
-		model_name=args.model,
+	embeddings, from_cache = load_or_compute_embeddings(
 		cache_dir=cache_dir,
-		normalize=normalize,
+		frames=frames,
+		config=embedding_config,
 		force=args.force,
 		batch_size=args.batch_size,
-		cache_key=cache_key,
 		progress=_progress,
-		transform_config=transform_config,
+		clear_others=not args.no_clear_others,
 	)
 
 	if from_cache:
