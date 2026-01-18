@@ -30,6 +30,7 @@ from PySide6.QtGui import (
 )
 
 from utils import prepare_output_dir
+import yaml
 from frame_selection_core import (
 	SelectionParams,
 	FrameSelectionData,
@@ -135,6 +136,36 @@ def build_frame_bboxes(
 						(labels, kf['x'], kf['y'], kf['width'], kf['height']))
 
 	return frame_bboxes, keyframe_frame_numbers
+
+
+def read_class_names_from_file(path: str) -> Dict[str, int]:
+	"""
+	Read class names from a YOLO-style YAML file.
+
+	Expects a YAML file containing a top-level `names` mapping (index->name) or a list of names.
+	Returns a dict mapping class name -> class id (index). Keys are lowercased for convenience.
+	"""
+	with open(path, 'r', encoding='utf-8') as f:
+		data = yaml.safe_load(f)
+	if not isinstance(data, dict) or 'names' not in data:
+		raise ValueError("YAML class file must contain top-level 'names' mapping or list")
+
+	names_section = data['names']
+	name_to_id: Dict[str, int] = {}
+
+	if isinstance(names_section, dict):
+		# mapping from index->name; sort by index to preserve order
+		items = sorted(names_section.items(), key=lambda kv: int(kv[0]))
+		for idx, name in items:
+			name_to_id[str(name).strip().lower()] = int(idx)
+	elif isinstance(names_section, list):
+		for idx, name in enumerate(names_section):
+			name_to_id[str(name).strip().lower()] = idx
+	else:
+		raise ValueError("YAML 'names' must be either a mapping or a list")
+
+	return name_to_id
+
 
 
 @dataclass
@@ -1297,7 +1328,7 @@ class MainWindow(QMainWindow):
 		
 		# Frame selection data
 		self.data: Optional[FrameSelectionData] = None
-		self.current_processing_selection: Set[int] = set()
+		self.current_processing_selection: Set[int] = set() # indices/indexes (which are not frame numbers)
 		self.previous_processing_selection: Set[int] = set()
 		self.selected_for_preview_index: Optional[int] = None
 		self.manually_selected: Set[int] = set()
@@ -1741,11 +1772,18 @@ class MainWindow(QMainWindow):
 		open_action.triggered.connect(self._on_file_open)
 		file_menu.addAction(open_action)
 		
-		save_action = QAction("&Save", self)
+		save_action = QAction("Save selected images", self)
 		save_action.setShortcut(QKeySequence.Save)
 		save_action.triggered.connect(self._on_file_save)
 		self.save_action = save_action  # Store for enabling/disabling
 		file_menu.addAction(save_action)
+
+		# Save YOLO labels action (enabled only when annotations are loaded)
+		save_yolo_action = QAction("Save YOLO labels for selected images", self)
+		save_yolo_action.triggered.connect(self._on_file_save_yolo)
+		save_yolo_action.setEnabled(False)
+		file_menu.addAction(save_yolo_action)
+		self.save_yolo_action = save_yolo_action
 		
 		file_menu.addSeparator()
 		
@@ -1890,6 +1928,138 @@ class MainWindow(QMainWindow):
 		progress.close()
 		self.output_dir = output_dir
 		QMessageBox.information(self, "Success", f"Saved {copied} frames to:\n{output_dir}")
+
+	def _on_file_save_yolo(self):
+		"""Handle File > Save YOLO labels for selected images."""
+		if self.data is None or len(self.current_processing_selection) == 0:
+			QMessageBox.warning(self, "Warning", "No frames selected for saving.")
+			return
+		if self.annotation_data is None:
+			QMessageBox.warning(self, "Warning", "Annotations are not loaded. Load Label Studio annotations first.")
+			return
+
+		# Ask for YAML class names file
+		yaml_path, _ = QFileDialog.getOpenFileName(
+			self,
+			"Select YOLO class YAML file",
+			str(self.input_dir) if self.input_dir else "",
+			"YAML Files (*.yaml *.yml);;All Files (*)"
+		)
+		if not yaml_path:
+			return
+
+		# Read class names (keys are lowercased by helper)
+		try:
+			name_to_id = read_class_names_from_file(yaml_path)
+		except Exception as e:
+			QMessageBox.critical(self, "Error", f"Failed to read class names file:\n{e}")
+			return
+
+		# Gather labels present in selected frames and validate against YAML
+		selected_labels: Set[str] = set()
+		for idx in sorted(self.current_processing_selection):
+			frame_number = self.data.get_frame_number(idx)
+			for labels, *_ in self.annotation_data.get_bboxes_for_frame(frame_number):
+				for lbl in labels:
+					if lbl:
+						selected_labels.add(lbl.strip().lower())
+
+		unknown = sorted(selected_labels - set(name_to_id.keys()))
+		if unknown:
+			QMessageBox.critical(self, "Error",
+				f"Some labels in selected frames are not present in {yaml_path}: {unknown}\n\nUpdate the class names file and try again.")
+			return
+
+		# Ask for output directory for .txt files
+		folder = QFileDialog.getExistingDirectory(
+			self,
+			"Select Output Directory for YOLO .txt files",
+			str(self.output_dir) if self.output_dir else ""
+		)
+		if not folder:
+			return
+		output_dir = Path(folder).resolve()
+
+		# Confirm clearing non-empty directory (only *.txt files)
+		try:
+			next(output_dir.iterdir())
+			# Directory is not empty
+			reply = QMessageBox.question(self, "Directory Not Empty",
+				f"The directory '{output_dir.name}' is not empty.\n\nDelete all '*.txt' files and proceed?",
+				QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+			if reply != QMessageBox.StandardButton.Yes:
+				return
+			try:
+				prepare_output_dir(str(output_dir), ['*.txt'])
+			except RuntimeError as e:
+				QMessageBox.critical(self, "Error", f"Failed to clear directory: {e}")
+				return
+		except StopIteration:
+			# Directory is empty
+			output_dir.mkdir(parents=True, exist_ok=True)
+
+		# Read skip-empty preference from INI (default: False)
+		skip_empty = settings.value("yolo/skip_empty", False, bool)
+
+		# Write YOLO .txt files for selected frames and compute stats (per-image counts)
+		label_counts: Dict[str, int] = {}
+		empty_frames = 0
+		annotated_frames = 0
+
+		for idx in sorted(self.current_processing_selection):
+			frame_number = self.data.get_frame_number(idx)
+			image_name = self.data.get_frame_filename(idx)
+			bboxes = self.annotation_data.get_bboxes_for_frame(frame_number)
+			# Lowercase labels for mapping
+			bboxes_lc = [([lbl.strip().lower() for lbl in labels], x, y, w, h) for labels, x, y, w, h in bboxes]
+
+			# Build annotation lines and collect unique labels for this image
+			out_lines: List[str] = []
+			labels_in_image: Set[str] = set()
+			for labels, x_pct, y_pct, w_pct, h_pct in bboxes_lc:
+				cx = (x_pct + w_pct / 2.0) / 100.0
+				cy = (y_pct + h_pct / 2.0) / 100.0
+				nw = max(0.0, min(1.0, w_pct / 100.0))
+				nh = max(0.0, min(1.0, h_pct / 100.0))
+				for lbl in labels:
+					lbl_key = str(lbl).strip().lower()
+					if not lbl_key:
+						continue
+					labels_in_image.add(lbl_key)
+					# name_to_id validated earlier; use it directly
+					out_lines.append(f"{name_to_id[lbl_key]} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+
+			# Write file (respect skip_empty setting)
+			out_path = output_dir / f"{Path(image_name).stem}.txt"
+			if out_lines:
+				with open(out_path, 'w', encoding='utf-8') as f:
+					f.write('\n'.join(out_lines) + '\n')
+				annotated_frames += 1
+			else:
+				empty_frames += 1
+				if not skip_empty:
+					open(out_path, 'w', encoding='utf-8').close()
+
+			# Update per-image label counts (count each image once per label)
+			for lbl_key in labels_in_image:
+				label_counts[lbl_key] = label_counts.get(lbl_key, 0) + 1
+
+		# Build summary message
+		summary_lines = [
+			f"Saved YOLO label files with annotations to:",
+			str(output_dir),
+			"",
+			f"Selected frames: {len(self.current_processing_selection)}",
+			f"Frames without annotations (empty): {empty_frames}",
+			f"Frames with annotations: {annotated_frames}",
+		]
+		if label_counts:
+			summary_lines.append("")
+			summary_lines.append("Per-label image counts:")
+			for lbl, cnt in sorted(label_counts.items()):
+				summary_lines.append(f"  {lbl}: {cnt}")
+
+		QMessageBox.information(self, "Success", "\n".join(summary_lines))
 
 	def _show_about(self):
 		QMessageBox.about(self, "About", "Hello world!")
@@ -2080,6 +2250,9 @@ class MainWindow(QMainWindow):
 		# Update UI
 		self.preview_panel.set_annotation_data(self.annotation_data)
 		self.nav_panel.set_keyframe_navigation_enabled(True)
+		# Enable Save YOLO labels action when annotations are present
+		if hasattr(self, 'save_yolo_action'):
+			self.save_yolo_action.setEnabled(True)
 		
 		# Re-bake thumbnails to include annotation bboxes/markers
 		if self.data is not None:
@@ -2098,6 +2271,9 @@ class MainWindow(QMainWindow):
 		self.annotation_data = None
 		self.preview_panel.set_annotation_data(None)
 		self.nav_panel.set_keyframe_navigation_enabled(False)
+		# Disable Save YOLO labels action when annotations are cleared
+		if hasattr(self, 'save_yolo_action'):
+			self.save_yolo_action.setEnabled(False)
 		
 		# Re-bake thumbnails without annotations
 		if self.data is not None:
