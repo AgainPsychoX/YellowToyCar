@@ -549,13 +549,11 @@ class ThumbnailWidget(QLabel):
 		self.index = index
 		self.thumbnail_size = thumbnail_size
 		self.frame_number = None  # Will be set later
-		self.pixmap_original: Optional[QPixmap] = None
+		self._baked_pixmap: Optional[QPixmap] = None
 		self.is_selected_for_processing = False
 		self.is_added = False
 		self.is_removed = False
 		self.is_previewed = False
-		self.is_keyframe = False
-		self.has_annotation = False
 		self.is_forced_select = False
 		self.is_forced_unselect = False
 		# Cache for rendered thumbnail with current state
@@ -568,12 +566,10 @@ class ThumbnailWidget(QLabel):
 		self.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignTop)
 		self.setStyleSheet("background-color: #333;")
 	
-	def set_pixmap(self, pixmap: QPixmap):
-		"""Set the thumbnail pixmap."""
-		self.pixmap_original = pixmap.scaled(
-			self.thumbnail_size, self.thumbnail_size,
-			Qt.AspectRatioMode.KeepAspectRatio,
-			Qt.TransformationMode.SmoothTransformation)
+	def set_baked_pixmap(self, pixmap: QPixmap):
+		"""Set a pre-baked thumbnail pixmap (image + baked bboxes/markers)."""
+		# Expect pixmap to already be the full display canvas (thumbnail + label area)
+		self._baked_pixmap = pixmap
 		self._cache_valid = False
 		self._update_display()
 	
@@ -582,15 +578,7 @@ class ThumbnailWidget(QLabel):
 		self.frame_number = frame_number
 		self._cache_valid = False
 		self._update_display()
-	
-	def set_annotation_info(self, has_annotation: bool, is_keyframe: bool):
-		"""Set annotation-related display flags."""
-		if self.has_annotation != has_annotation or self.is_keyframe != is_keyframe:
-			self.has_annotation = has_annotation
-			self.is_keyframe = is_keyframe
-			self._cache_valid = False
-			self._update_display()
-	
+
 	def set_forced_state(self, forced_select: bool, forced_unselect: bool):
 		"""Set manual force select/unselect state."""
 		if self.is_forced_select != forced_select or self.is_forced_unselect != forced_unselect:
@@ -623,7 +611,7 @@ class ThumbnailWidget(QLabel):
 	
 	def _update_display(self):
 		"""Redraw with current state."""
-		if self.pixmap_original is None:
+		if self._baked_pixmap is None:
 			return
 		
 		# Create display pixmap with border and text space
@@ -672,29 +660,8 @@ class ThumbnailWidget(QLabel):
 				self.thumbnail_size + 8 - border_width - 4,
 				self.thumbnail_size + 8 - border_width - 4)
 		
-		# Draw thumbnail centered
-		x = (self.thumbnail_size + 8 - self.pixmap_original.width()) // 2
-		y = (self.thumbnail_size + 8 - self.pixmap_original.height()) // 2
-		painter.drawPixmap(x, y, self.pixmap_original)
-		
-		# Draw keyframe triangle marker in top-right corner
-		if self.is_keyframe:
-			triangle_size = 12
-			triangle = QPolygon([
-				QPoint(self.thumbnail_size + 8 - triangle_size, 0),
-				QPoint(self.thumbnail_size + 8, 0),
-				QPoint(self.thumbnail_size + 8, triangle_size)
-			])
-			painter.setPen(Qt.PenStyle.NoPen)
-			painter.setBrush(QBrush(self.COLOR_KEYFRAME))
-			painter.drawPolygon(triangle)
-		
-		# Draw annotation indicator (small dot in top-left corner)
-		if self.has_annotation:
-			dot_size = 8
-			painter.setPen(Qt.PenStyle.NoPen)
-			painter.setBrush(QBrush(self.COLOR_HAS_ANNOTATION))
-			painter.drawEllipse(4, 4, dot_size, dot_size)
+		# Draw baked thumbnail (pre-rendered with bboxes/markers)
+		painter.drawPixmap(0, 0, self._baked_pixmap)
 		
 		# Draw frame number text below
 		if self.frame_number is not None:
@@ -741,6 +708,8 @@ class ThumbnailGrid(QScrollArea):
 		
 		# Track columns for layout
 		self.columns = 4
+		# Reference to FrameSelectionData for baking/rebake
+		self.data: Optional[FrameSelectionData] = None
 	
 	def set_frame_count(self, count: int):
 		"""Initialize thumbnail widgets."""
@@ -792,13 +761,122 @@ class ThumbnailGrid(QScrollArea):
 
 		return super().keyPressEvent(event)
 	
-	def set_thumbnail(self, index: int, pixmap: QPixmap, frame_number: int = None):
-		"""Set pixmap and frame number for a specific thumbnail."""
+	def set_baked_thumbnail(self, index: int, pixmap: QPixmap, frame_number: int = None):
+		"""Set a pre-baked pixmap and frame number for a specific thumbnail."""
 		if 0 <= index < len(self.thumbnails):
-			self.thumbnails[index].set_pixmap(pixmap)
+			self.thumbnails[index].set_baked_pixmap(pixmap)
 			if frame_number is not None:
 				self.thumbnails[index].set_frame_number(frame_number)
-	
+
+	def set_data_and_bake(self, data: FrameSelectionData, annotation_data: Optional['AnnotationData'] = None):
+		"""Create thumbnails from FrameSelectionData and bake bboxes/markers into pixmaps.
+		Blocking operation but shows a progress dialog.
+		"""
+		# Clear existing thumbnails
+		for thumb in self.thumbnails:
+			thumb.deleteLater()
+		self.thumbnails.clear()
+		self.data = data
+		count = len(self.data)
+		progress = QProgressDialog("Preparing thumbnails...", "Cancel", 0, count, self)
+		progress.setWindowModality(Qt.WindowModality.WindowModal)
+		progress.setMinimumDuration(200)
+		progress.setValue(0)
+		for i in range(count):
+			if progress.wasCanceled():
+				break
+			path = self.data.get_frame_path(i)
+			frame_num = self.data.get_frame_number(i)
+			bboxes = None
+			is_keyframe = False
+			if annotation_data is not None:
+				bboxes = annotation_data.get_bboxes_for_frame(frame_num)
+				is_keyframe = annotation_data.is_keyframe(frame_num)
+			baked = self._bake_thumbnail(path, bboxes, is_keyframe, annotation_data)
+			thumb = ThumbnailWidget(i, self.thumbnail_size)
+			thumb.clicked.connect(self.thumbnail_clicked.emit)
+			thumb.set_baked_pixmap(baked)
+			thumb.set_frame_number(frame_num)
+			self.thumbnails.append(thumb)
+			progress.setValue(i+1)
+		progress.close()
+		self._relayout()
+
+	def _bake_thumbnail(self, path: Path, bboxes: Optional[List[Tuple[List[str], float, float, float, float]]], is_keyframe: bool, annotation_data: Optional['AnnotationData'] = None) -> QPixmap:
+		"""Create a baked pixmap with image, bboxes and optional markers and return it."""
+		total_height = self.thumbnail_size + 8 + 20
+		display = QPixmap(self.thumbnail_size + 8, total_height)
+		display.fill(Qt.GlobalColor.transparent)
+		painter = QPainter(display)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		orig = QPixmap(str(path))
+		if orig.isNull():
+			# draw placeholder
+			painter.setPen(QColor(200,200,200))
+			font = QFont("Arial", 7)
+			painter.setFont(font)
+			painter.drawText(display.rect(), Qt.AlignmentFlag.AlignCenter, "Failed to load")
+			painter.end()
+			return display
+		scaled = orig.scaled(self.thumbnail_size, self.thumbnail_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+		x = (self.thumbnail_size + 8 - scaled.width()) // 2
+		y = (self.thumbnail_size + 8 - scaled.height()) // 2
+		painter.drawPixmap(x, y, scaled)
+		# draw bboxes
+		if bboxes:
+			for labels, x_pct, y_pct, w_pct, h_pct in bboxes:
+				# Choose color from annotation data if available, fall back to white
+				if annotation_data and labels:
+					color = annotation_data.get_color_for_label(labels[0] if labels else "")
+					color.setAlpha(200)
+				else:
+					color = QColor(255, 255, 255, 200)
+				pen = QPen(color, 1)
+				painter.setPen(pen)
+				bw = scaled.width()
+				bh = scaled.height()
+				bx = x + (x_pct / 100.0) * bw
+				by = y + (y_pct / 100.0) * bh
+				bw_px = (w_pct / 100.0) * bw
+				bh_px = (h_pct / 100.0) * bh
+				# Ensure min visible size
+				rect = QRect(int(bx), int(by), max(1, int(bw_px)), max(1, int(bh_px)))
+				painter.drawRect(rect)
+		# keyframe marker
+		if is_keyframe:
+			triangle_size = 12
+			triangle = QPolygon([
+				QPoint(self.thumbnail_size + 8 - triangle_size, 0),
+				QPoint(self.thumbnail_size + 8, 0),
+				QPoint(self.thumbnail_size + 8, triangle_size)
+			])
+			painter.setPen(Qt.PenStyle.NoPen)
+			painter.setBrush(QBrush(ThumbnailWidget.COLOR_KEYFRAME))
+			painter.drawPolygon(triangle)
+		painter.end()
+		return display
+
+	def rebake_all(self, annotation_data: Optional['AnnotationData']):
+		"""Re-bake all thumbnails using current FrameSelectionData and new annotation data."""
+		if self.data is None:
+			return
+		count = len(self.data)
+		progress = QProgressDialog("Updating thumbnails...", "Cancel", 0, count, self)
+		progress.setWindowModality(Qt.WindowModality.WindowModal)
+		progress.setMinimumDuration(200)
+		progress.setValue(0)
+		for i in range(count):
+			if progress.wasCanceled():
+				break
+			path = self.data.get_frame_path(i)
+			frame_num = self.data.get_frame_number(i)
+			bboxes = annotation_data.get_bboxes_for_frame(frame_num) if annotation_data else None
+			is_kf = annotation_data.is_keyframe(frame_num) if annotation_data else False
+			baked = self._bake_thumbnail(path, bboxes, is_kf, annotation_data)
+			self.thumbnails[i].set_baked_pixmap(baked)
+			progress.setValue(i+1)
+		progress.close()
+
 	def update_states(
 		self,
 		selected_for_processing: Set[int],
@@ -826,15 +904,8 @@ class ThumbnailGrid(QScrollArea):
 		annotation_data: Optional['AnnotationData'],
 		frame_number_getter: Callable[[int], int]
 	):
-		"""Update annotation indicators for all thumbnails."""
-		for i, thumb in enumerate(self.thumbnails):
-			if annotation_data is None:
-				thumb.set_annotation_info(False, False)
-			else:
-				frame_num = frame_number_getter(i)
-				has_ann = annotation_data.has_annotations(frame_num)
-				is_kf = annotation_data.is_keyframe(frame_num)
-				thumb.set_annotation_info(has_ann, is_kf)
+		"""Deprecated: re-bake thumbnails with new annotation data."""
+		self.rebake_all(annotation_data)
 
 	def scroll_to_thumbnail(self, index: int):
 		"""Scroll to ensure thumbnail at index is visible."""
@@ -1428,9 +1499,8 @@ class MainWindow(QMainWindow):
 			embeddings,
 			temporal_window=self.current_params.temporal_window)
 		
-		# Initialize UI
-		self.thumbnail_grid.set_frame_count(len(self.data))
-		self.load_thumbnails()
+		# Initialize UI: bake thumbnails (includes annotation overlays if any)
+		self.thumbnail_grid.set_data_and_bake(self.data, self.annotation_data)
 		self.apply_selection()
 	
 	def _generate_embeddings(self, force: bool = False):
@@ -1502,31 +1572,6 @@ class MainWindow(QMainWindow):
 		
 		if reply == QMessageBox.StandardButton.Retry:
 			self._generate_embeddings(force=True)
-	
-	def load_thumbnails(self):
-		"""Load thumbnail images."""
-		if self.data is None:
-			return
-		
-		progress = QProgressDialog("Loading thumbnails...", "Cancel", 0, len(self.data), self)
-		progress.setWindowModality(Qt.WindowModality.WindowModal)
-		progress.setMinimumDuration(500)
-		
-		for i in range(len(self.data)):
-			if progress.wasCanceled():
-				break
-			
-			path = self.data.get_frame_path(i)
-			frame_num = self.data.get_frame_number(i)
-			pixmap = QPixmap(str(path))
-			if not pixmap.isNull():
-				self.thumbnail_grid.set_thumbnail(i, pixmap, frame_num)
-			
-			progress.setValue(i + 1)
-			if i % 50 == 0:
-				QApplication.processEvents()
-		
-		progress.close()
 	
 	def apply_selection(self):
 		"""Apply current parameters and update selection."""
@@ -2010,12 +2055,9 @@ class MainWindow(QMainWindow):
 		self.preview_panel.set_annotation_data(self.annotation_data)
 		self.nav_panel.set_keyframe_navigation_enabled(True)
 		
-		# Update thumbnail annotation indicators
+		# Re-bake thumbnails to include annotation bboxes/markers
 		if self.data is not None:
-			self.thumbnail_grid.update_annotation_info(
-				self.annotation_data,
-				lambda i: self.data.get_frame_number(i)
-			)
+			self.thumbnail_grid.rebake_all(self.annotation_data)
 		
 		# Refresh current preview to show annotations
 		self._show_current_preview()
@@ -2030,9 +2072,9 @@ class MainWindow(QMainWindow):
 		self.preview_panel.set_annotation_data(None)
 		self.nav_panel.set_keyframe_navigation_enabled(False)
 		
-		# Clear thumbnail annotation indicators
+		# Re-bake thumbnails without annotations
 		if self.data is not None:
-			self.thumbnail_grid.update_annotation_info(None, lambda i: 0)
+			self.thumbnail_grid.rebake_all(None)
 		
 		self._show_current_preview()
 
