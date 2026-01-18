@@ -175,7 +175,7 @@ class AnnotationData:
 class AnnotationLoadDialog(QDialog):
 	"""Dialog for loading Label Studio annotations with task ID and frame offset."""
 	
-	def __init__(self, parent=None, default_offset: int = 1):
+	def __init__(self, parent=None):
 		super().__init__(parent)
 		self.setWindowTitle("Load Label Studio Annotations")
 		self.setMinimumWidth(300)
@@ -193,7 +193,7 @@ class AnnotationLoadDialog(QDialog):
 		# Frame offset input
 		self.offset_spin = QSpinBox()
 		self.offset_spin.setRange(-100, 100)
-		self.offset_spin.setValue(default_offset)
+		self.offset_spin.setValue(1)
 		self.offset_spin.setToolTip(
 			"Offset to map Label Studio frame numbers to image file frame numbers.\n"
 			"Default 1 because Label Studio uses 0-based frames but image files are often 1-based.")
@@ -1282,14 +1282,26 @@ class PreviewPanel(QWidget):
 class MainWindow(QMainWindow):
 	"""Main application window."""
 	
-	def __init__(self, input_dir: Optional[Path] = None, output_dir: Optional[Path] = None):
+	def __init__(
+		self,
+		input_dir: Optional[Path] = None,
+		output_dir: Optional[Path] = None,
+		label_studio_annotations: Optional[Path] = None,
+		label_studio_task_id: Optional[int] = None,
+	):
 		super().__init__()
 		self.input_dir = input_dir
 		self.output_dir = output_dir
+		self.startup_ls_path: Optional[Path] = label_studio_annotations
+		self.startup_ls_task_id: Optional[int] = label_studio_task_id
+		
+		# Frame selection data
 		self.data: Optional[FrameSelectionData] = None
 		self.current_processing_selection: Set[int] = set()
 		self.previous_processing_selection: Set[int] = set()
 		self.selected_for_preview_index: Optional[int] = None
+		self.manually_selected: Set[int] = set()
+		self.manually_unselected: Set[int] = set()
 		self.current_params = SelectionParams(
 			concentration_percentile=settings.value("selection/concentration_percentile", 90.0, float),
 			total_change_percentile=settings.value("selection/total_change_percentile", 60.0, float),
@@ -1300,11 +1312,6 @@ class MainWindow(QMainWindow):
 		
 		# Annotation data
 		self.annotation_data: Optional[AnnotationData] = None
-		self.default_annotation_offset = 1
-		
-		# Manual force select/unselect
-		self.manually_selected: Set[int] = set()
-		self.manually_unselected: Set[int] = set()
 		
 		# Embedding configuration
 		self.embedding_config: EmbeddingConfig = EmbeddingConfig(
@@ -1498,6 +1505,14 @@ class MainWindow(QMainWindow):
 			frames,
 			embeddings,
 			temporal_window=self.current_params.temporal_window)
+		
+		# If annotations were provided on startup, load them now so they are included in the initial bake
+		if self.startup_ls_path:
+			# Explicit task id may be None; load_label_studio_annotations will validate
+			self.load_label_studio_annotations(self.startup_ls_path, self.startup_ls_task_id)
+			# Clear to avoid re-loading
+			self.startup_ls_path = None
+			self.startup_ls_task_id = None
 		
 		# Initialize UI: bake thumbnails (includes annotation overlays if any)
 		self.thumbnail_grid.set_data_and_bake(self.data, self.annotation_data)
@@ -2010,16 +2025,30 @@ class MainWindow(QMainWindow):
 			return
 		
 		# Show dialog for task ID and offset
-		dialog = AnnotationLoadDialog(self, self.default_annotation_offset)
-		if task_ids:
-			dialog.task_id_spin.setRange(min(task_ids), max(task_ids))
-			dialog.task_id_spin.setValue(task_ids[0])
+		dialog = AnnotationLoadDialog(self)
+		dialog.task_id_spin.setRange(min(task_ids), max(task_ids))
+		dialog.task_id_spin.setValue(task_ids[0])
 		
 		if dialog.exec() != QDialog.DialogCode.Accepted:
 			return
 		
 		task_id, frame_offset = dialog.get_values()
-		self.default_annotation_offset = frame_offset  # Remember for next time
+		
+		# Load annotations using the chosen values
+		self.load_label_studio_annotations(json_path, task_id, frame_offset)
+
+	def load_label_studio_annotations(self, json_path: Path, task_id: int, frame_offset: int = 1) -> bool:
+		# Load JSON
+		try:
+			with open(json_path, 'r', encoding='utf-8') as f:
+				data = json.load(f)
+		except Exception as e:
+			QMessageBox.critical(self, "Error", f"Failed to load JSON file:\n{e}")
+			return False
+		
+		if not isinstance(data, list) or len(data) == 0:
+			QMessageBox.critical(self, "Error", "JSON file does not contain any tasks.")
+			return False
 		
 		# Find the task
 		task_data = None
@@ -2027,17 +2056,15 @@ class MainWindow(QMainWindow):
 			if task.get('id') == task_id:
 				task_data = task
 				break
-		
 		if task_data is None:
 			QMessageBox.critical(self, "Error", f"Task ID {task_id} not found in JSON file.")
-			return
+			return False
 		
 		# Parse annotations
 		tracks = _collect_tracks(task_data)
 		if not tracks:
-			QMessageBox.warning(self, "Warning", 
-				f"No videorectangle annotations found for task {task_id}.")
-			return
+			QMessageBox.warning(self, "Warning", f"No videorectangle annotations found for task {task_id}.")
+			return False
 		
 		frame_bboxes, keyframe_frame_numbers = build_frame_bboxes(tracks, frame_offset)
 		
@@ -2048,8 +2075,7 @@ class MainWindow(QMainWindow):
 			frame_offset=frame_offset,
 			frame_bboxes=frame_bboxes,
 			keyframe_frame_numbers=keyframe_frame_numbers,
-			label_colors=dict(DEFAULT_LABEL_COLORS)
-		)
+			label_colors=dict(DEFAULT_LABEL_COLORS))
 		
 		# Update UI
 		self.preview_panel.set_annotation_data(self.annotation_data)
@@ -2065,6 +2091,7 @@ class MainWindow(QMainWindow):
 		QMessageBox.information(self, "Annotations Loaded",
 			f"Loaded {len(frame_bboxes)} annotated frames with {len(keyframe_frame_numbers)} keyframes\n"
 			f"from task {task_id} (offset: {frame_offset})")
+		return True
 
 	def _on_clear_annotations(self):
 		"""Handle File > Clear Annotations."""
@@ -2158,8 +2185,18 @@ def main():
 		help="Directory where selected frames will be saved")
 	parser.add_argument("--thumbnail-size", type=int, default=80,
 		help="Thumbnail size in pixels (default: 80)")
+	parser.add_argument("--label-studio-annotations", type=str, default=None,
+		help="Path to Label Studio JSON export to load annotations from on startup")
+	parser.add_argument("--label-studio-task-id", type=int, default=None,
+		help="Optional task ID from the Label Studio JSON to load on startup")
 	
 	args = parser.parse_args()
+
+	# Require task id when annotation JSON is provided via CLI
+	if args.label_studio_annotations and args.label_studio_task_id is None:
+		print("Error: --label-studio-task-id must be provided when --label-studio-annotations is used.", file=sys.stderr)
+		return 2
+	
 	input_dir = Path(args.input_dir) if args.input_dir else None
 	output_dir = Path(args.output_dir) if args.output_dir else None
 	
@@ -2195,7 +2232,10 @@ def main():
 		}
 	""")
 	
-	window = MainWindow(input_dir, output_dir)
+	window = MainWindow(
+		input_dir, output_dir, 
+		label_studio_annotations=(Path(args.label_studio_annotations) if args.label_studio_annotations else None), 
+		label_studio_task_id=args.label_studio_task_id)
 	window.showMaximized()
 	
 	return app.exec()
