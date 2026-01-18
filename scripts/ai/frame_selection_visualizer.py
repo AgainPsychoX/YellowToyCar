@@ -721,11 +721,6 @@ class ThumbnailGrid(QScrollArea):
 	"""Scrollable grid of thumbnails."""
 	
 	thumbnail_clicked = Signal(int)
-	# Navigation signals for when grid has focus
-	navigate_prev_frame = Signal()
-	navigate_next_frame = Signal()
-	navigate_prev_selected = Signal()
-	navigate_next_selected = Signal()
 	
 	def __init__(self, thumbnail_size: int = 80):
 		super().__init__()
@@ -787,27 +782,14 @@ class ThumbnailGrid(QScrollArea):
 	
 	def keyPressEvent(self, event):
 		"""Handle arrow key navigation when grid or thumbnail has focus."""
-		if event.isAutoRepeat():
-			return super().keyPressEvent(event)
-		
 		key = event.key()
 		modifiers = event.modifiers()
-		
-		# Handle arrow keys for frame navigation
-		if modifiers == Qt.KeyboardModifier.NoModifier:
-			if key == Qt.Key.Key_Left:
-				self.navigate_prev_frame.emit()
-				return
-			elif key == Qt.Key.Key_Right:
-				self.navigate_next_frame.emit()
-				return
-			elif key == Qt.Key.Key_Up:
-				self.navigate_prev_selected.emit()
-				return
-			elif key == Qt.Key.Key_Down:
-				self.navigate_next_selected.emit()
-				return
-		
+
+		# Pass arrow keys to parent; To move the grid scroll area `scroll_to_thumbnail` is used, or PgUp/PgDn.
+		if key == Qt.Key.Key_Left or key == Qt.Key.Key_Right or key == Qt.Key.Key_Up or key == Qt.Key.Key_Down:
+			self.parentWidget().keyPressEvent(event)
+			return
+
 		return super().keyPressEvent(event)
 	
 	def set_thumbnail(self, index: int, pixmap: QPixmap, frame_number: int = None):
@@ -1312,13 +1294,7 @@ class MainWindow(QMainWindow):
 		self.nav_panel.next_keyframe.connect(self._nav_next_keyframe)
 		self.nav_panel.toggle_force_select.connect(self._toggle_force_select)
 		right_layout.addWidget(self.nav_panel)
-		
-		# Thumbnail grid arrow key navigation
-		self.thumbnail_grid.navigate_prev_frame.connect(self._nav_left)
-		self.thumbnail_grid.navigate_next_frame.connect(self._nav_right)
-		self.thumbnail_grid.navigate_prev_selected.connect(self._nav_prev_selected)
-		self.thumbnail_grid.navigate_next_selected.connect(self._nav_next_selected)
-		
+
 		# Parameters at bottom
 		self.param_panel = ParameterPanel()
 		self.param_panel.apply_clicked.connect(self.apply_selection)
@@ -1686,7 +1662,7 @@ class MainWindow(QMainWindow):
 		"""
 		Register non-arrow shortcuts for preview navigation.
 		
-		Arrow keys are handled in keyPressEvent() so they don't interfere with sliders and spinboxes that need them.
+		Arrow keys are handled in keyPressEvent() so they don't interfere with sliders and spin-boxes that need them.
 		"""
 		self._shortcuts = []
 		self._shortcuts.append(self._make_shortcut_sequence("Shift+Left", self._nav_prev_selected))
@@ -2113,18 +2089,19 @@ class MainWindow(QMainWindow):
 		modifiers = event.modifiers()
 		
 		# Handle plain arrow keys
-		if key == Qt.Key.Key_Left and modifiers == Qt.KeyboardModifier.NoModifier:
-			self._nav_left()
-			return
-		elif key == Qt.Key.Key_Right and modifiers == Qt.KeyboardModifier.NoModifier:
-			self._nav_right()
-			return
-		elif key == Qt.Key.Key_Up and modifiers == Qt.KeyboardModifier.NoModifier:
-			self._nav_up()
-			return
-		elif key == Qt.Key.Key_Down and modifiers == Qt.KeyboardModifier.NoModifier:
-			self._nav_down()
-			return
+		if modifiers == Qt.KeyboardModifier.NoModifier:
+			if key == Qt.Key.Key_Left:
+				self._nav_left()
+				return
+			elif key == Qt.Key.Key_Right:
+				self._nav_right()
+				return
+			elif key == Qt.Key.Key_Up:
+				self._nav_up()
+				return
+			elif key == Qt.Key.Key_Down:
+				self._nav_down()
+				return
 		
 		return super().keyPressEvent(event)
 
