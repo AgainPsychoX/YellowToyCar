@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 	QLabel, QSlider, QPushButton, QScrollArea, QGridLayout,
 	QSplitter, QProgressDialog, QMessageBox, QGroupBox,
 	QSpinBox, QDoubleSpinBox, QAbstractSpinBox, QCheckBox, QStyleFactory,
-	QFileDialog, QDialog, QDialogButtonBox, QFormLayout, QComboBox, QLineEdit
+	QFileDialog, QDialog, QDialogButtonBox, QFormLayout, QComboBox, QLineEdit,
+	QTableWidget, QTableWidgetItem, QColorDialog, QHeaderView
 )
 from PySide6.QtCore import Qt, Signal, QThread, QTimer, QRect, QPoint, QSettings
 from PySide6.QtGui import (
@@ -52,21 +53,31 @@ from frame_selection_core import (
 settings: Optional[QSettings] = None
 
 
-# ==============================================================================
-# Annotation Data Structures and Helpers (adapted from prepare_yolo_dataset.py)
-# ==============================================================================
+def save_label_colors_to_settings(colors: Dict[str, QColor]):
+	"""Save label colors to QSettings as hex strings."""
+	# Clear old entries
+	settings.beginGroup("label_colors")
+	settings.remove("")
+	settings.endGroup()
+	
+	# Save new colors
+	settings.beginGroup("label_colors")
+	for name, color in colors.items():
+		settings.setValue(name, color.name())  # Stores as hex like "#RRGGBB"
+	settings.endGroup()
 
-# Default label colors for common annotations (for now hardcoded)
-DEFAULT_LABEL_COLORS = {
-	"none": QColor(114, 114, 121),
-	"close": QColor(255, 0, 0),
-	"away": QColor(0, 255, 0),
-	"special": QColor(238, 129, 234),
-	"left-front": QColor(0, 26, 128),
-	"left-back": QColor(0, 26, 128),
-	"right-front": QColor(0, 225, 255),
-	"right-back": QColor(0, 225, 255),
-}
+
+def load_label_colors_from_settings() -> Dict[str, QColor]:
+	"""Load label colors from QSettings."""
+	colors: Dict[str, QColor] = {}
+	settings.beginGroup("label_colors")
+	for key in settings.allKeys():
+		color_str = settings.value(key)
+		color = QColor(color_str)
+		if color.isValid():
+			colors[key] = color
+	settings.endGroup()
+	return colors
 
 
 def _collect_tracks(task_data: dict) -> List[dict]:
@@ -194,12 +205,10 @@ class AnnotationData:
 		return frame_number in self.frame_bboxes
 	
 	def get_color_for_label(self, label: str) -> QColor:
-		"""Get color for a label, with fallback to defaults."""
+		"""Get color for a label, with fallback to default red."""
 		label_lower = label.lower()
 		if label_lower in self.label_colors:
 			return self.label_colors[label_lower]
-		if label_lower in DEFAULT_LABEL_COLORS:
-			return DEFAULT_LABEL_COLORS[label_lower]
 		return QColor(255, 0, 0)  # Default red
 
 
@@ -251,9 +260,249 @@ class AnnotationLoadDialog(QDialog):
 		return self.task_id_spin.value(), self.offset_spin.value()
 
 
-# ==============================================================================
-# Embedding Generation Dialog
-# ==============================================================================
+class LabelColorsDialog(QDialog):
+	"""Dialog for configuring label colors with a table interface."""
+	
+	def __init__(self, parent=None, initial_colors: Optional[Dict[str, QColor]] = None, 
+				 available_labels: Optional[Set[str]] = None):
+		super().__init__(parent)
+		self.setWindowTitle("Label colors configuration")
+		self.setMinimumWidth(450)
+		self.setMinimumHeight(400)
+		
+		# Work on a copy and ensure it's a dict
+		self.colors: Dict[str, QColor] = dict(initial_colors or {})
+
+		# If no initial colors, populate for available labels
+		if not self.colors and available_labels:
+			for label in available_labels:
+				self.colors[label.lower()] = QColor(0, 0, 0)
+		
+		self.available_labels = available_labels or set()
+		self.new_color = QColor(255, 0, 0)
+		self.setup_ui()
+	
+	def setup_ui(self):
+		layout = QVBoxLayout(self)
+		
+		# Instructions
+		instr_label = QLabel("Configure colors for annotation labels. Click color cells to choose a color.")
+		instr_label.setWordWrap(True)
+		layout.addWidget(instr_label)
+		
+		# Table for existing colors
+		self.table = QTableWidget()
+		self.table.setColumnCount(4)
+		self.table.setHorizontalHeaderLabels(["ID", "Label Name", "Color", "Actions"])
+		self.table.setAlternatingRowColors(True)
+		self.table.verticalHeader().setVisible(False)
+		self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+		self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+		self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+		self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+		self.table.setColumnWidth(0, 40)
+		self.table.setColumnWidth(2, 60)
+		self.table.setColumnWidth(3, 110)
+		layout.addWidget(self.table)
+		
+		# Populate table with existing colors
+		self._populate_table()
+		
+		# Buttons
+		button_box = QDialogButtonBox(
+			QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+		button_box.accepted.connect(self.accept)
+		button_box.rejected.connect(self.reject)
+		layout.addWidget(button_box)
+	
+	def _populate_table(self):
+		"""Fill table with current colors."""
+		self.table.setRowCount(0)  # Clear everything first
+		self.table.setRowCount(len(self.colors) + 1)
+		
+		# Use insertion order from dict
+		for row, (name, color) in enumerate(self.colors.items()):
+			# ID column (auto-generated, 0-based)
+			id_item = QTableWidgetItem(str(row))
+			id_item.setFlags(id_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+			id_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+			self.table.setItem(row, 0, id_item)
+			
+			# Name column (editable)
+			name_item = QTableWidgetItem(name)
+			self.table.setItem(row, 1, name_item)
+			
+			# Color column (button to pick color)
+			color_btn = QPushButton()
+			color_btn.setFixedSize(40, 24)
+			color_btn.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #888;")
+			color_btn.setToolTip("Click to change color")
+			color_btn.clicked.connect(lambda checked=False, r=row: self._pick_color(r))
+			
+			# Center the button in the cell
+			container = QWidget()
+			container_layout = QHBoxLayout(container)
+			container_layout.setContentsMargins(0, 0, 0, 0)
+			container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+			container_layout.addWidget(color_btn)
+			self.table.setCellWidget(row, 2, container)
+			
+			# Action buttons column (always 3 buttons for consistency)
+			action_layout = QHBoxLayout()
+			action_layout.setContentsMargins(4, 0, 4, 0)
+			action_layout.setSpacing(2)
+			action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+			action_widget = QWidget()
+			
+			# Up button
+			up_btn = QPushButton("↑")
+			up_btn.setFixedSize(22, 22)
+			up_btn.setEnabled(row > 0)
+			up_btn.clicked.connect(lambda checked=False, r=row: self._move_row(r, -1))
+			action_layout.addWidget(up_btn)
+			
+			# Down button
+			down_btn = QPushButton("↓")
+			down_btn.setFixedSize(22, 22)
+			down_btn.setEnabled(row < len(self.colors) - 1)
+			down_btn.clicked.connect(lambda checked=False, r=row: self._move_row(r, 1))
+			action_layout.addWidget(down_btn)
+			
+			# Delete button
+			del_btn = QPushButton("✕")
+			del_btn.setFixedSize(22, 22)
+			del_btn.setStyleSheet("color: #ff4444; font-weight: bold;")
+			del_btn.clicked.connect(lambda checked=False, r=row: self._delete_row(r))
+			action_layout.addWidget(del_btn)
+			
+			action_widget.setLayout(action_layout)
+			self.table.setCellWidget(row, 3, action_widget)
+
+		# Final row for adding new colors
+		new_row = len(self.colors)
+		
+		id_item = QTableWidgetItem("NEW")
+		id_item.setFlags(id_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+		id_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+		id_item.setForeground(QBrush(QColor(150, 150, 150)))
+		self.table.setItem(new_row, 0, id_item)
+		
+		self.new_label_input = QLineEdit()
+		self.new_label_input.setPlaceholderText("Label name...")
+		self.new_label_input.setFrame(False)
+		self.table.setCellWidget(new_row, 1, self.new_label_input)
+		
+		self.new_color_btn = QPushButton()
+		self.new_color_btn.setFixedSize(40, 24)
+		self.new_color_btn.setStyleSheet(f"background-color: {self.new_color.name()}; border: 1px solid #888;")
+		self.new_color_btn.clicked.connect(self._pick_new_color)
+		
+		container = QWidget()
+		container_layout = QHBoxLayout(container)
+		container_layout.setContentsMargins(0, 0, 0, 0)
+		container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		container_layout.addWidget(self.new_color_btn)
+		self.table.setCellWidget(new_row, 2, container)
+		
+		add_btn = QPushButton("Add")
+		add_btn.setFixedSize(60, 24)
+		add_btn.setStyleSheet("font-weight: bold;")
+		add_btn.clicked.connect(self._add_new_color)
+		
+		action_widget = QWidget()
+		action_layout = QHBoxLayout(action_widget)
+		action_layout.setContentsMargins(4, 0, 4, 0)
+		action_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+		action_layout.addWidget(add_btn)
+		self.table.setCellWidget(new_row, 3, action_widget)
+	
+	def _pick_color(self, row: int):
+		"""Open color picker for a specific row."""
+		# Get current color from button
+		container = self.table.cellWidget(row, 2)
+		color_btn = container.findChild(QPushButton)
+		current_color_str = color_btn.styleSheet().split(": ")[1].split(";")[0]
+		current_color = QColor.fromString(current_color_str)
+		
+		# Pick new color
+		color = QColorDialog.getColor(current_color, self, "Choose color")
+		if color.isValid():
+			# Update button style
+			color_btn.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #888;")
+			# Update internal dict
+			name_item = self.table.item(row, 1)
+			if name_item:
+				name = name_item.text()
+				self.colors[name] = color
+	
+	def _pick_new_color(self):
+		"""Open color picker for new color."""
+		color = QColorDialog.getColor(self.new_color, self, "Choose color for new label")
+		if color.isValid():
+			self.new_color = color
+			self.new_color_btn.setStyleSheet(f"background-color: {self.new_color.name()}; border: 1px solid #888;")
+	
+	def _add_new_color(self):
+		"""Add new label color to the dictionary."""
+		name = self.new_label_input.text().strip()
+		if not name:
+			QMessageBox.warning(self, "Warning", "Please enter a label name")
+			return
+		
+		name_lower = name.lower()
+		if name_lower in self.colors:
+			QMessageBox.warning(self, "Warning", f"Label '{name}' already exists")
+			return
+		
+		self.colors[name_lower] = QColor(self.new_color)
+		self.new_color = QColor(255, 0, 0)
+		self._populate_table()
+		self.table.scrollToBottom()
+	
+	def _move_row(self, row: int, direction: int):
+		"""Move row up or down."""
+		# Preserve draft text in new label row
+		draft_text = self.new_label_input.text()
+		
+		# We need to preserve current edits in the table before swapping
+		current_colors = self.get_colors()
+		items = list(current_colors.items())
+		if 0 <= row + direction < len(items):
+			# Swap
+			items[row], items[row + direction] = items[row + direction], items[row]
+			self.colors = dict(items)
+			self._populate_table()
+			self.new_label_input.setText(draft_text)
+	
+	def _delete_row(self, row: int):
+		"""Delete a row."""
+		# Preserve draft text
+		draft_text = self.new_label_input.text()
+		
+		current_colors = self.get_colors()
+		items = list(current_colors.items())
+		if 0 <= row < len(items):
+			name = items[row][0]
+			del current_colors[name]
+			self.colors = current_colors
+			self._populate_table()
+			self.new_label_input.setText(draft_text)
+	
+	def get_colors(self) -> Dict[str, QColor]:
+		"""Return the current colors dictionary in the current table order."""
+		updated = {}
+		# Iterate over all rows except the last "NEW" row
+		for row in range(self.table.rowCount() - 1):
+			name_item = self.table.item(row, 1)
+			if name_item:
+				name = name_item.text().strip().lower()
+				if name:
+					container = self.table.cellWidget(row, 2)
+					color_btn = container.findChild(QPushButton)
+					color_str = color_btn.styleSheet().split(": ")[1].split(";")[0]
+					updated[name] = QColor.fromString(color_str)
+		return updated
+
 
 class EmbeddingGenerationDialog(QDialog):
 	"""Dialog for configuring embedding generation parameters."""
@@ -399,10 +648,6 @@ class EmbeddingGenerationDialog(QDialog):
 		)
 
 
-# ==============================================================================
-# Embedding Generation Worker Thread
-# ==============================================================================
-
 class EmbeddingGenerationWorker(QThread):
 	"""Worker thread for computing embeddings in background."""
 	
@@ -471,10 +716,6 @@ class EmbeddingGenerationWorker(QThread):
 				error_msg = f"Error generating embeddings: {str(exc)}"
 				self.error.emit(error_msg)
 
-
-# ==============================================================================
-# Navigation Panel
-# ==============================================================================
 
 class NavigationPanel(QWidget):
 	"""Panel with navigation buttons for frames."""
@@ -1341,6 +1582,9 @@ class MainWindow(QMainWindow):
 			min_spacing=settings.value("selection/min_spacing", 5, int))
 		self.previous_params = SelectionParams()
 		
+		# Label colors (loaded from settings)
+		self.label_colors: Dict[str, QColor] = load_label_colors_from_settings()
+		
 		# Annotation data
 		self.annotation_data: Optional[AnnotationData] = None
 		
@@ -1540,7 +1784,7 @@ class MainWindow(QMainWindow):
 		# If annotations were provided on startup, load them now so they are included in the initial bake
 		if self.startup_ls_path:
 			# Explicit task id may be None; load_label_studio_annotations will validate
-			self.load_label_studio_annotations(self.startup_ls_path, self.startup_ls_task_id)
+			self.load_label_studio_annotations(self.startup_ls_path, self.startup_ls_task_id, silent=True)
 			# Clear to avoid re-loading
 			self.startup_ls_path = None
 			self.startup_ls_task_id = None
@@ -1809,6 +2053,10 @@ class MainWindow(QMainWindow):
 		generate_embeddings_action.triggered.connect(lambda: self._generate_embeddings())
 		self.generate_embeddings_action = generate_embeddings_action
 		edit_menu.addAction(generate_embeddings_action)
+		
+		label_colors_action = QAction("&Label colors...", self)
+		label_colors_action.triggered.connect(self._on_edit_label_colors)
+		edit_menu.addAction(label_colors_action)
 
 		view_menu = menubar.addMenu("&View")
 		
@@ -2207,7 +2455,7 @@ class MainWindow(QMainWindow):
 		# Load annotations using the chosen values
 		self.load_label_studio_annotations(json_path, task_id, frame_offset)
 
-	def load_label_studio_annotations(self, json_path: Path, task_id: int, frame_offset: int = 1) -> bool:
+	def load_label_studio_annotations(self, json_path: Path, task_id: int, frame_offset: int = 1, silent: bool = False) -> bool:
 		# Load JSON
 		try:
 			with open(json_path, 'r', encoding='utf-8') as f:
@@ -2238,6 +2486,32 @@ class MainWindow(QMainWindow):
 		
 		frame_bboxes, keyframe_frame_numbers = build_frame_bboxes(tracks, frame_offset)
 		
+		# Auto-populate colors from labels if none configured yet
+		if not self.label_colors:
+			available_labels: Set[str] = set()
+			for bboxes in frame_bboxes.values():
+				for labels, _, _, _, _ in bboxes:
+					available_labels.update(labels)
+			
+			if available_labels:
+				colors_palette = [
+					QColor(255, 0, 0),      # Red
+					QColor(0, 255, 0),      # Green
+					QColor(0, 0, 255),      # Blue
+					QColor(255, 255, 0),    # Yellow
+					QColor(255, 0, 255),    # Magenta
+					QColor(0, 255, 255),    # Cyan
+					QColor(255, 128, 0),    # Orange
+					QColor(128, 0, 255),    # Purple
+					QColor(255, 192, 203),  # Pink
+					QColor(128, 128, 128),  # Gray
+				]
+				for i, label in enumerate(sorted(available_labels)):
+					color = colors_palette[i % len(colors_palette)]
+					self.label_colors[label.lower()] = color
+				# Save auto-populated colors to settings
+				save_label_colors_to_settings(self.label_colors)
+		
 		# Create annotation data
 		self.annotation_data = AnnotationData(
 			json_path=json_path,
@@ -2245,7 +2519,7 @@ class MainWindow(QMainWindow):
 			frame_offset=frame_offset,
 			frame_bboxes=frame_bboxes,
 			keyframe_frame_numbers=keyframe_frame_numbers,
-			label_colors=dict(DEFAULT_LABEL_COLORS))
+			label_colors=self.label_colors)
 		
 		# Update UI
 		self.preview_panel.set_annotation_data(self.annotation_data)
@@ -2261,9 +2535,10 @@ class MainWindow(QMainWindow):
 		# Refresh current preview to show annotations
 		self._show_current_preview()
 		
-		QMessageBox.information(self, "Annotations Loaded",
-			f"Loaded {len(frame_bboxes)} annotated frames with {len(keyframe_frame_numbers)} keyframes\n"
-			f"from task {task_id} (offset: {frame_offset})")
+		if not silent:
+			QMessageBox.information(self, "Annotations Loaded",
+				f"Loaded {len(frame_bboxes)} annotated frames with {len(keyframe_frame_numbers)} keyframes\n"
+				f"from task {task_id} (offset: {frame_offset})")
 		return True
 
 	def _on_clear_annotations(self):
@@ -2280,6 +2555,28 @@ class MainWindow(QMainWindow):
 			self.thumbnail_grid.rebake_all(None)
 		
 		self._show_current_preview()
+
+	def _on_edit_label_colors(self):
+		"""Handle Edit > Label colors to configure annotation label colors."""
+		# Get available labels from current annotations if any
+		available_labels: Set[str] = set()
+		if self.annotation_data is not None:
+			for bboxes in self.annotation_data.frame_bboxes.values():
+				for labels, _, _, _, _ in bboxes:
+					available_labels.update(labels)
+		
+		# Open dialog
+		dialog = LabelColorsDialog(self, initial_colors=self.label_colors, available_labels=available_labels)
+		if dialog.exec() == QDialog.Accepted:
+			# Get updated colors and save to settings
+			self.label_colors = dialog.get_colors()
+			save_label_colors_to_settings(self.label_colors)
+			
+			# Update annotation data colors and refresh UI if annotations are loaded
+			if self.annotation_data is not None:
+				self.annotation_data.label_colors = self.label_colors
+				self.thumbnail_grid.rebake_all(self.annotation_data)
+				self._show_current_preview()
 
 	def _navigate_to_neighbor_selected(self, previous: bool):
 		if self.data is None or len(self.data) == 0:
