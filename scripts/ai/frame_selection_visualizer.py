@@ -6,15 +6,17 @@ Interactive GUI for tuning frame selection parameters using ViT embeddings,
 with visualization of selected frames and Label Studio annotations.
 """
 
-import json
-import sys
 import argparse
+import importlib.util
+import json
 import shutil
+import sys
+import threading
+import yaml
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Dict, List, Set, Optional, Tuple
-
-import threading
 
 from PySide6.QtWidgets import (
 	QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -47,6 +49,7 @@ from frame_selection_core import (
 	EmbeddingConfig,
 	EmbeddingMeta,
 )
+from frame_selection_visualizer_api import ForceState, BBox, FrameInfo
 
 
 # Global settings instance (initialized in main())
@@ -1370,7 +1373,7 @@ class ParameterPanel(QWidget):
 		self.previous_labels["Min Spacing"].setText(str(params.min_spacing))
 		self._previous_params = params.copy()
 	
-	def update_stats(self, selected_for_processing: int, total: int, added: int, removed: int):
+	def update_stats(self, selected_for_processing: int, total: int, added: int, removed: int, filter_stats: Optional[str] = None):
 		"""Update selection statistics."""
 		self.stats_label.setText(
 			f"Selected for processing: {selected_for_processing} / {total} "
@@ -1386,6 +1389,14 @@ class ParameterPanel(QWidget):
 			self.diff_label.setText(" ".join(diff_parts))
 		else:
 			self.diff_label.setText("No changes")
+		
+		# Append filter info if active
+		if filter_stats:
+			current_text = self.diff_label.text()
+			if current_text:
+				self.diff_label.setText(f"{current_text} | {filter_stats}")
+			else:
+				self.diff_label.setText(filter_stats)
 	
 	def _reset_to_previous(self):
 		"""Reset sliders to previous values."""
@@ -1561,6 +1572,7 @@ class MainWindow(QMainWindow):
 		label_studio_annotations: Optional[Path] = None,
 		label_studio_task_id: Optional[int] = None,
 		label_studio_offset: Optional[int] = None,
+		filter_script_path: Optional[Path] = None,
 	):
 		super().__init__()
 		self.input_dir = input_dir
@@ -1568,6 +1580,8 @@ class MainWindow(QMainWindow):
 		self.startup_ls_path: Optional[Path] = label_studio_annotations
 		self.startup_ls_task_id: Optional[int] = label_studio_task_id
 		self.startup_ls_offset: Optional[int] = label_studio_offset
+		self.filter_script_path: Optional[Path] = filter_script_path
+		self.filter_stats: Optional[str] = None
 		
 		# Frame selection data
 		self.data: Optional[FrameSelectionData] = None
@@ -1792,6 +1806,10 @@ class MainWindow(QMainWindow):
 			self.startup_ls_path = None
 			self.startup_ls_task_id = None
 		
+		# Apply filter script if provided
+		if self.filter_script_path:
+			self._apply_filter_script()
+		
 		# Initialize UI: bake thumbnails (includes annotation overlays if any)
 		self.thumbnail_grid.set_data_and_bake(self.data, self.annotation_data)
 		self.apply_selection()
@@ -1866,6 +1884,89 @@ class MainWindow(QMainWindow):
 		if reply == QMessageBox.StandardButton.Retry:
 			self._generate_embeddings(force=True)
 	
+	def _apply_filter_script(self):
+		"""Load and execute filter script to set manual selections."""
+		if not self.filter_script_path or not self.filter_script_path.exists():
+			return
+		
+		try:
+			# Load the filter script module
+			spec = importlib.util.spec_from_file_location("user_filter", self.filter_script_path)
+			if spec is None or spec.loader is None:
+				raise ImportError(f"Cannot load filter script: {self.filter_script_path}")
+			
+			module = importlib.util.module_from_spec(spec)
+			# Ensure filter uses the same API module instance we're using
+			import frame_selection_visualizer_api
+			module.frame_selection_visualizer_api = frame_selection_visualizer_api
+			sys.modules["user_filter"] = module
+			spec.loader.exec_module(module)
+			
+			# Check if filter_frames function exists
+			if not hasattr(module, 'filter_frames'):
+				raise AttributeError(f"Filter script must define 'filter_frames' function")
+			
+			# Build FrameInfo list
+			frame_infos: List[FrameInfo] = []
+			for idx in range(len(self.data)):
+				frame_num = self.data.get_frame_number(idx)
+				path = self.data.get_frame_path(idx)
+				
+				# Get bbox data if annotations loaded
+				bboxes_raw = []
+				is_keyframe = False
+				if self.annotation_data:
+					bboxes_raw = self.annotation_data.get_bboxes_for_frame(frame_num)
+					is_keyframe = self.annotation_data.is_keyframe(frame_num)
+				
+				# Convert to BBox objects
+				bboxes = [
+					BBox(labels=labels, x=x, y=y, w=w, h=h)
+					for labels, x, y, w, h in bboxes_raw
+				]
+				
+				frame_infos.append(FrameInfo(
+					idx=idx,
+					frame_number=frame_num,
+					path=path,
+					bboxes=bboxes,
+					is_keyframe=is_keyframe
+				))
+			
+			# Call filter function
+			filter_result = module.filter_frames(frame_infos)
+			
+			# Apply results to manual selections
+			forced_select_count = 0
+			forced_unselect_count = 0
+			
+			for idx, state in filter_result.items():
+				if state == ForceState.SELECT:
+					self.manually_selected.add(idx)
+					forced_select_count += 1
+				elif state == ForceState.UNSELECT:
+					self.manually_unselected.add(idx)
+					forced_unselect_count += 1
+			
+			# Build stats message
+			script_name = self.filter_script_path.name
+			parts = []
+			if forced_select_count > 0:
+				parts.append(f'{forced_select_count} forced select')
+			if forced_unselect_count > 0:
+				parts.append(f'{forced_unselect_count} forced unselect')
+			
+			if parts:
+				self.filter_stats = f'<span style="color: #88f;">📄 Filter: {script_name} ({', '.join(parts)})</span>'
+			else:
+				self.filter_stats = f'<span style="color: #888;">📄 Filter: {script_name} (no changes)</span>'
+			
+		except Exception as e:
+			QMessageBox.warning(
+				self, "Filter Script Error",
+				f"Failed to execute filter script:\n{self.filter_script_path}\n\n{e}\n\nContinuing without filter.")
+			self.filter_stats = f'<span style="color: #c44;">⚠️ Filter error: {self.filter_script_path.name}</span>'
+	
 	def apply_selection(self):
 		"""Apply current parameters and update selection."""
 		if self.data is None:
@@ -1901,7 +2002,8 @@ class MainWindow(QMainWindow):
 			len(self.current_processing_selection),
 			len(self.data),
 			len(added),
-			len(removed))
+			len(removed),
+			filter_stats=self.filter_stats)
 		
 		self.param_panel.update_previous_display(self.previous_params)
 		
@@ -2667,6 +2769,8 @@ def main():
 		help="Optional task ID from the Label Studio JSON to load on startup")
 	parser.add_argument("--label-studio-offset", type=int, default=1,
 		help="Frame offset for Label Studio annotations (default: 1)")
+	parser.add_argument("--filter-script", type=str, default=None,
+		help="Path to Python filter script for custom frame filtering logic")
 	
 	args = parser.parse_args()
 
@@ -2714,7 +2818,8 @@ def main():
 		input_dir, output_dir, 
 		label_studio_annotations=(Path(args.label_studio_annotations) if args.label_studio_annotations else None), 
 		label_studio_task_id=args.label_studio_task_id,
-		label_studio_offset=args.label_studio_offset)
+		label_studio_offset=args.label_studio_offset,
+		filter_script_path=(Path(args.filter_script) if args.filter_script else None))
 	window.showMaximized()
 	
 	return app.exec()
