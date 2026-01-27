@@ -1560,12 +1560,14 @@ class MainWindow(QMainWindow):
 		output_dir: Optional[Path] = None,
 		label_studio_annotations: Optional[Path] = None,
 		label_studio_task_id: Optional[int] = None,
+		label_studio_offset: Optional[int] = None,
 	):
 		super().__init__()
 		self.input_dir = input_dir
 		self.output_dir = output_dir
 		self.startup_ls_path: Optional[Path] = label_studio_annotations
 		self.startup_ls_task_id: Optional[int] = label_studio_task_id
+		self.startup_ls_offset: Optional[int] = label_studio_offset
 		
 		# Frame selection data
 		self.data: Optional[FrameSelectionData] = None
@@ -1784,7 +1786,8 @@ class MainWindow(QMainWindow):
 		# If annotations were provided on startup, load them now so they are included in the initial bake
 		if self.startup_ls_path:
 			# Explicit task id may be None; load_label_studio_annotations will validate
-			self.load_label_studio_annotations(self.startup_ls_path, self.startup_ls_task_id, silent=True)
+			offset = self.startup_ls_offset if self.startup_ls_offset is not None else 1
+			self.load_label_studio_annotations(self.startup_ls_path, self.startup_ls_task_id, offset, silent=True)
 			# Clear to avoid re-loading
 			self.startup_ls_path = None
 			self.startup_ls_task_id = None
@@ -2662,6 +2665,8 @@ def main():
 		help="Path to Label Studio JSON export to load annotations from on startup")
 	parser.add_argument("--label-studio-task-id", type=int, default=None,
 		help="Optional task ID from the Label Studio JSON to load on startup")
+	parser.add_argument("--label-studio-offset", type=int, default=1,
+		help="Frame offset for Label Studio annotations (default: 1)")
 	
 	args = parser.parse_args()
 
@@ -2708,7 +2713,8 @@ def main():
 	window = MainWindow(
 		input_dir, output_dir, 
 		label_studio_annotations=(Path(args.label_studio_annotations) if args.label_studio_annotations else None), 
-		label_studio_task_id=args.label_studio_task_id)
+		label_studio_task_id=args.label_studio_task_id,
+		label_studio_offset=args.label_studio_offset)
 	window.showMaximized()
 	
 	return app.exec()
