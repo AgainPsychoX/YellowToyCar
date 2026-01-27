@@ -7,7 +7,6 @@ A frameless, transparent overlay window displaying a configurable triangle.
 import sys
 import signal
 import argparse
-from typing import Tuple
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtCore import Qt, QPointF, QRectF, Signal, QTimer
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath, QPolygonF

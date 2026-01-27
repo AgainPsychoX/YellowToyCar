@@ -26,4 +26,11 @@ d::Send, !{Right} ; Alt+Right - Jump 1 frame forward
 +d::Send, +!{Right} ; Shift+Alt+Right - Jump 10 frames forward
 ^a::Send, ^!{Left} ; Ctrl+Alt+Left - Jump to previous keyframe
 ^d::Send, ^!{Right} ; Ctrl+Alt+Right - Jump to next keyframe
+
+WheelUp::Send, !{Left} ; Scroll up - Jump 1 frame backward
+WheelDown::Send, !{Right} ; Scroll down - Jump 1 frame forward
++WheelUp::Send, +!{Left} ; Shift+Scroll up - Jump 10 frames backward
++WheelDown::Send, +!{Right} ; Shift+Scroll down - Jump 10 frames forward
+^WheelUp::Send, ^!{Left} ; Ctrl+Scroll up - Jump to previous keyframe
+^WheelDown::Send, ^!{Right} ; Ctrl+Scroll down - Jump to next keyframe
 #If
